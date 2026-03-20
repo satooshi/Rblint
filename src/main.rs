@@ -93,7 +93,20 @@ struct Cli {
     statistics: bool,
 }
 
-fn collect_ruby_files(paths: &[String], exclude: &[String]) -> Vec<String> {
+/// Compile exclude glob patterns once, warning on invalid entries.
+fn compile_exclude_patterns(raw: &[String]) -> Vec<glob::Pattern> {
+    raw.iter()
+        .filter_map(|s| match glob::Pattern::new(s) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                eprintln!("Warning: invalid exclude glob pattern '{}': {}", s, e);
+                None
+            }
+        })
+        .collect()
+}
+
+fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<String> {
     let mut files = Vec::new();
     for path in paths {
         let meta = std::fs::metadata(path);
@@ -133,22 +146,10 @@ fn collect_ruby_files(paths: &[String], exclude: &[String]) -> Vec<String> {
     files
 }
 
-/// Returns true if the path matches any exclude glob pattern.
-fn is_excluded(path: &str, patterns: &[String]) -> bool {
+/// Returns true if the path matches any pre-compiled exclude glob pattern.
+fn is_excluded(path: &str, patterns: &[glob::Pattern]) -> bool {
     let path = std::path::Path::new(path);
-    for pattern in patterns {
-        match glob::Pattern::new(pattern) {
-            Ok(p) => {
-                if p.matches_path(path) {
-                    return true;
-                }
-            }
-            Err(e) => {
-                eprintln!("Warning: invalid exclude glob pattern '{}': {}", pattern, e);
-            }
-        }
-    }
-    false
+    patterns.iter().any(|p| p.matches_path(path))
 }
 
 /// Lint a set of files and apply rule filters, returning (path, diagnostics) pairs.
@@ -245,7 +246,8 @@ fn main() {
     };
     let linter = Linter::with_config(&config);
 
-    let files = collect_ruby_files(&cli.paths, &config.exclude);
+    let exclude_patterns = compile_exclude_patterns(&config.exclude);
+    let files = collect_ruby_files(&cli.paths, &exclude_patterns);
     if files.is_empty() {
         eprintln!("No Ruby files found.");
         return;

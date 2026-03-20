@@ -115,7 +115,7 @@ fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token
                 suppressions.push(Suppression {
                     rules,
                     start,
-                    end: token.line,
+                    end: token.line.saturating_sub(1),
                 });
             }
         } else if let Some(rest) = text.strip_prefix("rlint:disable") {

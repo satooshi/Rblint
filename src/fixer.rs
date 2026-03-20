@@ -98,8 +98,21 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         let _ = std::fs::set_permissions(&tmp_path, meta.permissions());
     }
     if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
-        return Err(e);
+        // On Unix, rename() over an existing file is atomic and should succeed.
+        // On Windows it fails with AlreadyExists — remove the destination and retry.
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            if let Err(remove_err) = std::fs::remove_file(path) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Err(remove_err);
+            }
+            if let Err(retry_err) = std::fs::rename(&tmp_path, path) {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Err(retry_err);
+            }
+        } else {
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
     }
 
     // Count deduplicated fixes (mirrors apply_fixes first-per-line logic)
