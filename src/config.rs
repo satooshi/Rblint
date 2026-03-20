@@ -54,9 +54,13 @@ impl Config {
     /// Walk up from `start_dir` looking for `.rlint.toml`.
     /// Returns default config if none found.
     pub fn load(start_dir: &Path) -> Self {
-        let mut dir = Some(start_dir);
-        while let Some(d) = dir {
-            let config_path = d.join(".rlint.toml");
+        // Canonicalize so that parent() traversal works reliably with relative paths
+        // like "." where parent() would otherwise return None immediately.
+        let canonical =
+            std::fs::canonicalize(start_dir).unwrap_or_else(|_| start_dir.to_path_buf());
+        let mut dir: &Path = &canonical;
+        loop {
+            let config_path = dir.join(".rlint.toml");
             if config_path.exists() {
                 match std::fs::read_to_string(&config_path) {
                     Ok(content) => match toml::from_str(&content) {
@@ -72,7 +76,10 @@ impl Config {
                     }
                 }
             }
-            dir = d.parent();
+            match dir.parent() {
+                Some(p) => dir = p,
+                None => break,
+            }
         }
         Config::default()
     }

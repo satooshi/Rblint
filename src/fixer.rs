@@ -99,8 +99,10 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     }
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         // On Unix, rename() over an existing file is atomic and should succeed.
-        // On Windows it fails with AlreadyExists — use a backup-and-replace strategy
-        // to avoid a window where the file doesn't exist.
+        // On Windows it fails with AlreadyExists. We fall back to a backup-and-replace
+        // strategy: rename original to a .rlint_bak, then rename tmp into place.
+        // This is not atomic on Windows (there is a brief gap between the two renames),
+        // but restores the original if the second rename fails.
         if e.kind() == std::io::ErrorKind::AlreadyExists {
             let bak_path = format!("{}.rlint_bak", path);
             if let Err(bak_err) = std::fs::rename(path, &bak_path) {

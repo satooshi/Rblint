@@ -122,7 +122,10 @@ fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token
                             end,
                         });
                     }
-                    // rlint:enable Rxx but active block suppresses all → close the block
+                    // rlint:enable Rxx after rlint:disable (all rules): close the
+                    // entire block. The current rule structure cannot represent
+                    // "suppress all except Rxx", so a targeted enable after a global
+                    // disable re-enables all rules. Document this in user-facing help.
                     (Some(_), None) => {
                         suppressions.push(Suppression {
                             rules: None,
@@ -139,9 +142,11 @@ fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token
                             end,
                         });
                         // Re-open only the rules that were NOT enabled.
+                        // Use the same prefix semantics as Suppression::suppresses():
+                        // an ac_rule is considered enabled if any en_rule is a prefix of it.
                         let remaining: Vec<String> = ac_rules
                             .iter()
-                            .filter(|r| !en_rules.contains(*r))
+                            .filter(|r| !en_rules.iter().any(|en| r.starts_with(en.as_str())))
                             .cloned()
                             .collect();
                         if !remaining.is_empty() {
