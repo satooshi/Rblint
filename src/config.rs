@@ -58,13 +58,17 @@ impl Config {
         while let Some(d) = dir {
             let config_path = d.join(".rlint.toml");
             if config_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&config_path) {
-                    match toml::from_str(&content) {
+                match std::fs::read_to_string(&config_path) {
+                    Ok(content) => match toml::from_str(&content) {
                         Ok(config) => return config,
                         Err(e) => {
                             eprintln!("Warning: Failed to parse {}: {}", config_path.display(), e);
                             return Config::default();
                         }
+                    },
+                    Err(e) => {
+                        eprintln!("Warning: Failed to read {}: {}", config_path.display(), e);
+                        return Config::default();
                     }
                 }
             }

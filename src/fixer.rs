@@ -55,7 +55,7 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
     }
 
     let mut result = lines.join("\n");
-    if ends_with_newline || !result.is_empty() {
+    if ends_with_newline {
         result.push('\n');
     }
     result
@@ -78,7 +78,10 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
 
     let tmp_path = format!("{}.rlint_tmp", path);
     std::fs::write(&tmp_path, &fixed)?;
-    std::fs::rename(&tmp_path, path)?;
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
 
     Ok(fixable.len())
 }
