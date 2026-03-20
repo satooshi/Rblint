@@ -8,8 +8,12 @@ use crate::diagnostic::{Diagnostic, FixKind};
 ///
 /// Multiple fixes on the same line are deduplicated (only the first fix per line is applied).
 /// Fixes are applied in reverse-line order to preserve 1-based line numbers during insertions.
+/// Original line endings (LF or CRLF) are preserved.
 pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
     let ends_with_newline = source.ends_with('\n');
+    let uses_crlf = source.contains("\r\n");
+    let line_ending = if uses_crlf { "\r\n" } else { "\n" };
+    // str::lines() strips both \n and \r\n, so line content is always clean.
     let mut lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
 
     // Separate into replace and insert kinds, deduplicate by line number (first-wins)
@@ -54,15 +58,15 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> String {
         lines.insert(insert_at, diag.fix.clone().unwrap_or_default());
     }
 
-    let mut result = lines.join("\n");
+    let mut result = lines.join(line_ending);
     if ends_with_newline {
-        result.push('\n');
+        result.push_str(line_ending);
     }
     result
 }
 
 /// Apply fixes to a file on disk atomically (write to tmp, then rename).
-/// Returns the number of fixes applied, or 0 if the file was unchanged.
+/// Returns the number of distinct fixes applied (after per-line deduplication), or 0 if unchanged.
 pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     let fixable: Vec<&Diagnostic> = diags.iter().filter(|d| d.fix.is_some()).collect();
     if fixable.is_empty() {
@@ -83,7 +87,18 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         return Err(e);
     }
 
-    Ok(fixable.len())
+    // Count deduplicated fixes (mirrors apply_fixes first-per-line logic)
+    let mut seen_replace = std::collections::HashSet::new();
+    let mut seen_insert = std::collections::HashSet::new();
+    let applied = fixable
+        .iter()
+        .filter(|d| match d.fix_kind {
+            FixKind::ReplaceLine => seen_replace.insert(d.line),
+            FixKind::InsertBefore => seen_insert.insert(d.line),
+        })
+        .count();
+
+    Ok(applied)
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::time::Instant;
 use walkdir::WalkDir;
 
 use rlint::config::Config;
+use rlint::diagnostic::{Diagnostic, Severity};
 use rlint::linter::Linter;
 use rlint::reporter::{OutputFormat, Reporter};
 
@@ -36,7 +37,7 @@ Configuration:
 Inline suppression:
   # rlint:disable-next-line R001
   # rlint:disable R001,R002
-  # rlint:enable R001,R002
+  # rlint:enable               (re-enables all; scoped enable not yet supported)
 
 Rules:
   R001  Line too long
@@ -134,14 +135,49 @@ fn collect_ruby_files(paths: &[String], exclude: &[String]) -> Vec<String> {
 
 /// Returns true if the path matches any exclude glob pattern.
 fn is_excluded(path: &str, patterns: &[String]) -> bool {
+    let path = std::path::Path::new(path);
     for pattern in patterns {
         if let Ok(p) = glob::Pattern::new(pattern) {
-            if p.matches(path) {
+            if p.matches_path(path) {
                 return true;
             }
         }
     }
     false
+}
+
+/// Lint a set of files and apply rule filters, returning (path, diagnostics) pairs.
+fn lint_files(
+    files: &[String],
+    linter: &Linter,
+    effective_select: &Option<Vec<String>>,
+    effective_ignore: &Option<Vec<String>>,
+    errors_only: bool,
+) -> Vec<(String, Vec<Diagnostic>)> {
+    files
+        .par_iter()
+        .filter_map(|path| {
+            let source = std::fs::read_to_string(path).ok()?;
+            let mut diags = linter.lint_file(path, &source);
+            diags.retain(|d| {
+                if let Some(sel) = effective_select {
+                    if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) {
+                        return false;
+                    }
+                }
+                if let Some(ign) = effective_ignore {
+                    if ign.iter().any(|r| d.rule.starts_with(r.as_str())) {
+                        return false;
+                    }
+                }
+                if errors_only && d.severity != Severity::Error {
+                    return false;
+                }
+                true
+            });
+            Some((path.clone(), diags))
+        })
+        .collect()
 }
 
 fn main() {
@@ -171,13 +207,21 @@ fn main() {
         config.ignore.extend(extra);
     }
 
-    let effective_select = selected.or_else(|| {
+    let mut effective_select = selected.or_else(|| {
         if config.select.is_empty() {
             None
         } else {
             Some(config.select.clone())
         }
     });
+    // extend-select adds rules on top of the selected set (no-op when all rules are active)
+    if !config.extend_select.is_empty() {
+        if let Some(ref mut sel) = effective_select {
+            sel.extend(config.extend_select.iter().cloned());
+            sel.sort_unstable();
+            sel.dedup();
+        }
+    }
     let effective_ignore = if config.ignore.is_empty() {
         None
     } else {
@@ -202,34 +246,8 @@ fn main() {
         return;
     }
 
-    // Lint files in parallel
-    let all_diags: Vec<(String, Vec<rlint::diagnostic::Diagnostic>)> = files
-        .par_iter()
-        .filter_map(|path| {
-            let source = std::fs::read_to_string(path).ok()?;
-            let mut diags = linter.lint_file(path, &source);
-
-            // Apply rule filters
-            diags.retain(|d| {
-                if let Some(sel) = &effective_select {
-                    if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) {
-                        return false;
-                    }
-                }
-                if let Some(ign) = &effective_ignore {
-                    if ign.iter().any(|r| d.rule.starts_with(r.as_str())) {
-                        return false;
-                    }
-                }
-                if cli.errors_only && d.severity != rlint::diagnostic::Severity::Error {
-                    return false;
-                }
-                true
-            });
-
-            Some((path.clone(), diags))
-        })
-        .collect();
+    // First lint pass
+    let all_diags = lint_files(&files, &linter, &effective_select, &effective_ignore, cli.errors_only);
 
     // Apply fixes when --fix is requested
     let mut total_fixed = 0usize;
@@ -242,11 +260,17 @@ fn main() {
         }
     }
 
-    // Build flat display list: exclude fixed violations when --fix was applied
-    let mut flat_diags: Vec<rlint::diagnostic::Diagnostic> = all_diags
+    // When fixes were applied, re-lint the modified files to show accurate post-fix state.
+    // Otherwise use the first-pass results directly.
+    let display_diags = if cli.fix && total_fixed > 0 {
+        lint_files(&files, &linter, &effective_select, &effective_ignore, cli.errors_only)
+    } else {
+        all_diags
+    };
+
+    let mut flat_diags: Vec<Diagnostic> = display_diags
         .iter()
         .flat_map(|(_, d)| d.iter())
-        .filter(|d| !(cli.fix && d.fix.is_some()))
         .cloned()
         .collect();
     flat_diags.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
@@ -264,16 +288,12 @@ fn main() {
         print_statistics(&flat_diags);
     }
 
-    if !cli.no_fail
-        && flat_diags
-            .iter()
-            .any(|d| d.severity == rlint::diagnostic::Severity::Error)
-    {
+    if !cli.no_fail && flat_diags.iter().any(|d| d.severity == Severity::Error) {
         std::process::exit(1);
     }
 }
 
-fn print_statistics(diags: &[rlint::diagnostic::Diagnostic]) {
+fn print_statistics(diags: &[Diagnostic]) {
     use std::collections::HashMap;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for d in diags {

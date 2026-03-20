@@ -109,8 +109,8 @@ fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[crate::lexer::Token
                 start: next_line,
                 end: next_line,
             });
-        } else if let Some(rest) = text.strip_prefix("rlint:enable") {
-            let _rules = parse_rule_list(rest.trim()); // could scope enable, but treat as full re-enable
+        } else if text.strip_prefix("rlint:enable").is_some() {
+            // rlint:enable closes the nearest open disable block (scoped re-enable not yet supported)
             if let Some((rules, start)) = active.take() {
                 suppressions.push(Suppression {
                     rules,
