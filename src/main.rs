@@ -1,16 +1,10 @@
-mod lexer;
-mod diagnostic;
-mod rules;
-mod linter;
-mod reporter;
-
 use std::time::Instant;
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
 use walkdir::WalkDir;
 
-use linter::Linter;
-use reporter::{OutputFormat, Reporter};
+use rlint::linter::Linter;
+use rlint::reporter::{OutputFormat, Reporter};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -142,7 +136,7 @@ fn main() {
     }
 
     // Lint files in parallel
-    let all_diags: Vec<(String, Vec<crate::diagnostic::Diagnostic>)> = files.par_iter()
+    let all_diags: Vec<(String, Vec<rlint::diagnostic::Diagnostic>)> = files.par_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(path).ok()?;
             let mut diags = linter.lint_file(path, &source);
@@ -155,7 +149,7 @@ fn main() {
                 if let Some(ign) = &ignored {
                     if ign.iter().any(|r| d.rule.starts_with(r.as_str())) { return false; }
                 }
-                if cli.errors_only && d.severity != crate::diagnostic::Severity::Error {
+                if cli.errors_only && d.severity != rlint::diagnostic::Severity::Error {
                     return false;
                 }
                 true
@@ -165,7 +159,7 @@ fn main() {
         })
         .collect();
 
-    let mut flat_diags: Vec<crate::diagnostic::Diagnostic> = all_diags.iter()
+    let mut flat_diags: Vec<rlint::diagnostic::Diagnostic> = all_diags.iter()
         .flat_map(|(_, d)| d.iter())
         .cloned()
         .collect();
@@ -180,12 +174,12 @@ fn main() {
         print_statistics(&flat_diags);
     }
 
-    if !cli.no_fail && flat_diags.iter().any(|d| d.severity == crate::diagnostic::Severity::Error) {
+    if !cli.no_fail && flat_diags.iter().any(|d| d.severity == rlint::diagnostic::Severity::Error) {
         std::process::exit(1);
     }
 }
 
-fn print_statistics(diags: &[crate::diagnostic::Diagnostic]) {
+fn print_statistics(diags: &[rlint::diagnostic::Diagnostic]) {
     use std::collections::HashMap;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for d in diags {

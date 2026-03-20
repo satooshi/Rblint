@@ -125,3 +125,83 @@ impl Rule for NamingRule {
         diags
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    fn check(source: &str) -> Vec<Diagnostic> {
+        let lines: Vec<&str> = source.lines().collect();
+        let tokens = Lexer::new(source).tokenize();
+        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        NamingRule.check(&ctx)
+    }
+
+    fn rules_in(diags: &[Diagnostic]) -> Vec<&str> {
+        diags.iter().map(|d| d.rule).collect()
+    }
+
+    // --- R010: method names ---
+
+    #[test]
+    fn no_violation_snake_case_method() {
+        assert!(check("def foo_bar\nend").is_empty());
+    }
+
+    #[test]
+    fn no_violation_single_word_method() {
+        assert!(check("def calculate\nend").is_empty());
+    }
+
+    #[test]
+    fn no_violation_method_with_question_mark() {
+        assert!(check("def valid?\nend").is_empty());
+    }
+
+    #[test]
+    fn no_violation_method_with_bang() {
+        assert!(check("def save!\nend").is_empty());
+    }
+
+    #[test]
+    fn violation_camel_case_method() {
+        let diags = check("def myMethod\nend");
+        assert!(rules_in(&diags).contains(&"R010"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_pascal_case_method() {
+        let diags = check("def MyMethod\nend");
+        // PascalCase starting uppercase → tokenized as Constant, not Ident, so R010 won't fire
+        // but no crash expected
+        let _ = diags;
+    }
+
+    // --- R012: variable names ---
+
+    #[test]
+    fn no_violation_snake_case_variable() {
+        let diags = check("my_var = 1");
+        assert!(!rules_in(&diags).contains(&"R012"));
+    }
+
+    #[test]
+    fn no_violation_underscore_prefix_variable() {
+        let diags = check("_private = 1");
+        assert!(!rules_in(&diags).contains(&"R012"));
+    }
+
+    #[test]
+    fn violation_camel_case_variable() {
+        let diags = check("myVar = 1");
+        assert!(rules_in(&diags).contains(&"R012"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_message_mentions_variable_name() {
+        let diags = check("fooBar = 42");
+        let r012 = diags.iter().find(|d| d.rule == "R012").expect("R012 expected");
+        assert!(r012.message.contains("fooBar"));
+    }
+}

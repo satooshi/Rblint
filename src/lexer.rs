@@ -450,3 +450,157 @@ impl<'a> Lexer<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tokenize(src: &str) -> Vec<Token> {
+        Lexer::new(src).tokenize()
+    }
+
+    fn kinds(src: &str) -> Vec<TokenKind> {
+        tokenize(src).into_iter().map(|t| t.kind).collect()
+    }
+
+    fn non_ws_kinds(src: &str) -> Vec<TokenKind> {
+        tokenize(src)
+            .into_iter()
+            .filter(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline | TokenKind::Eof))
+            .map(|t| t.kind)
+            .collect()
+    }
+
+    // --- Keywords ---
+
+    #[test]
+    fn keywords_are_recognized() {
+        assert_eq!(non_ws_kinds("def"), vec![TokenKind::Def]);
+        assert_eq!(non_ws_kinds("end"), vec![TokenKind::End]);
+        assert_eq!(non_ws_kinds("class"), vec![TokenKind::Class]);
+        assert_eq!(non_ws_kinds("module"), vec![TokenKind::Module]);
+        assert_eq!(non_ws_kinds("if"), vec![TokenKind::If]);
+        assert_eq!(non_ws_kinds("unless"), vec![TokenKind::Unless]);
+        assert_eq!(non_ws_kinds("while"), vec![TokenKind::While]);
+        assert_eq!(non_ws_kinds("return"), vec![TokenKind::Return]);
+        assert_eq!(non_ws_kinds("nil"), vec![TokenKind::Nil]);
+        assert_eq!(non_ws_kinds("true"), vec![TokenKind::True]);
+        assert_eq!(non_ws_kinds("false"), vec![TokenKind::False]);
+    }
+
+    #[test]
+    fn ident_vs_constant() {
+        assert_eq!(non_ws_kinds("foo"), vec![TokenKind::Ident]);
+        assert_eq!(non_ws_kinds("Foo"), vec![TokenKind::Constant]);
+        assert_eq!(non_ws_kinds("FOO"), vec![TokenKind::Constant]);
+    }
+
+    // --- Variables ---
+
+    #[test]
+    fn instance_variable() {
+        let toks = tokenize("@foo");
+        assert_eq!(toks[0].kind, TokenKind::InstanceVar);
+        assert_eq!(toks[0].text, "@foo");
+    }
+
+    #[test]
+    fn class_variable() {
+        let toks = tokenize("@@bar");
+        assert_eq!(toks[0].kind, TokenKind::ClassVar);
+        assert_eq!(toks[0].text, "@@bar");
+    }
+
+    #[test]
+    fn global_variable() {
+        let toks = tokenize("$baz");
+        assert_eq!(toks[0].kind, TokenKind::GlobalVar);
+        assert_eq!(toks[0].text, "$baz");
+    }
+
+    // --- Literals ---
+
+    #[test]
+    fn integer_literal() {
+        assert_eq!(non_ws_kinds("42"), vec![TokenKind::Integer]);
+        assert_eq!(non_ws_kinds("0xFF"), vec![TokenKind::Integer]);
+    }
+
+    #[test]
+    fn float_literal() {
+        assert_eq!(non_ws_kinds("3.14"), vec![TokenKind::Float]);
+    }
+
+    #[test]
+    fn string_double_quote() {
+        let toks = tokenize("\"hello\"");
+        assert_eq!(toks[0].kind, TokenKind::StringLiteral);
+        assert_eq!(toks[0].text, "\"hello\"");
+    }
+
+    #[test]
+    fn string_single_quote() {
+        let toks = tokenize("'world'");
+        assert_eq!(toks[0].kind, TokenKind::StringLiteral);
+    }
+
+    #[test]
+    fn symbol_literal() {
+        let toks = tokenize(":my_sym");
+        assert_eq!(toks[0].kind, TokenKind::Symbol);
+        assert_eq!(toks[0].text, ":my_sym");
+    }
+
+    // --- Compound operators ---
+
+    #[test]
+    fn compound_operators() {
+        assert_eq!(non_ws_kinds("=="), vec![TokenKind::EqEq]);
+        assert_eq!(non_ws_kinds("!="), vec![TokenKind::NotEq]);
+        assert_eq!(non_ws_kinds("<="), vec![TokenKind::LtEq]);
+        assert_eq!(non_ws_kinds(">="), vec![TokenKind::GtEq]);
+        assert_eq!(non_ws_kinds("<=>"), vec![TokenKind::Spaceship]);
+        assert_eq!(non_ws_kinds("&&"), vec![TokenKind::And2]);
+        assert_eq!(non_ws_kinds("||"), vec![TokenKind::Or2]);
+        assert_eq!(non_ws_kinds("->"), vec![TokenKind::Arrow]);
+        assert_eq!(non_ws_kinds("=>"), vec![TokenKind::FatArrow]);
+        assert_eq!(non_ws_kinds("::"), vec![TokenKind::ColonColon]);
+    }
+
+    // --- Line & column tracking ---
+
+    #[test]
+    fn line_numbers_are_tracked() {
+        let toks = tokenize("a\nb\nc");
+        let idents: Vec<_> = toks.iter().filter(|t| t.kind == TokenKind::Ident).collect();
+        assert_eq!(idents[0].line, 1);
+        assert_eq!(idents[1].line, 2);
+        assert_eq!(idents[2].line, 3);
+    }
+
+    #[test]
+    fn last_token_is_eof() {
+        let toks = tokenize("x = 1");
+        assert_eq!(toks.last().unwrap().kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn empty_source_has_only_eof() {
+        let toks = tokenize("");
+        assert_eq!(toks.len(), 1);
+        assert_eq!(toks[0].kind, TokenKind::Eof);
+    }
+
+    #[test]
+    fn comment_is_tokenized() {
+        let toks = tokenize("# hello world");
+        assert_eq!(toks[0].kind, TokenKind::Comment);
+        assert_eq!(toks[0].text, "# hello world");
+    }
+
+    #[test]
+    fn method_with_bang_or_question() {
+        assert_eq!(non_ws_kinds("valid?"), vec![TokenKind::Ident]);
+        assert_eq!(non_ws_kinds("save!"), vec![TokenKind::Ident]);
+    }
+}

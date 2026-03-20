@@ -9,6 +9,10 @@ license = "MIT"
 name = "rlint"
 path = "src/main.rs"
 
+[lib]
+name = "rlint"
+path = "src/lib.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"

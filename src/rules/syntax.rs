@@ -161,3 +161,130 @@ impl Rule for SyntaxRule {
         diags
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    fn check(source: &str) -> Vec<Diagnostic> {
+        let lines: Vec<&str> = source.lines().collect();
+        let tokens = Lexer::new(source).tokenize();
+        let ctx = LintContext { file: "test.rb", source, lines: &lines, tokens: &tokens };
+        SyntaxRule.check(&ctx)
+    }
+
+    fn has_rule(diags: &[Diagnostic], rule: &str) -> bool {
+        diags.iter().any(|d| d.rule == rule)
+    }
+
+    // --- R030: bracket balance ---
+
+    #[test]
+    fn no_violation_balanced_parens() {
+        assert!(!has_rule(&check("foo(a, b)"), "R030"));
+    }
+
+    #[test]
+    fn no_violation_balanced_brackets() {
+        assert!(!has_rule(&check("arr[0]"), "R030"));
+    }
+
+    #[test]
+    fn no_violation_balanced_braces() {
+        assert!(!has_rule(&check("h = {a: 1}"), "R030"));
+    }
+
+    #[test]
+    fn violation_extra_closing_paren() {
+        let diags = check("foo())");
+        assert!(has_rule(&diags, "R030"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_unclosed_paren() {
+        let diags = check("foo(a, b");
+        assert!(has_rule(&diags, "R030"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_extra_closing_bracket() {
+        let diags = check("a]");
+        assert!(has_rule(&diags, "R030"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_extra_closing_brace() {
+        let diags = check("x }");
+        assert!(has_rule(&diags, "R030"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_nested_balanced() {
+        assert!(!has_rule(&check("foo([1, 2], {a: 3})"), "R030"));
+    }
+
+    // --- R031: end matching ---
+
+    #[test]
+    fn no_violation_def_end() {
+        assert!(!has_rule(&check("def foo\n  1\nend"), "R031"));
+    }
+
+    #[test]
+    fn no_violation_class_end() {
+        assert!(!has_rule(&check("class Foo\nend"), "R031"));
+    }
+
+    #[test]
+    fn no_violation_if_end() {
+        assert!(!has_rule(&check("if true\n  1\nend"), "R031"));
+    }
+
+    #[test]
+    fn violation_extra_end() {
+        let diags = check("def foo\nend\nend");
+        assert!(has_rule(&diags, "R031"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_missing_end() {
+        let diags = check("def foo\n  1");
+        assert!(has_rule(&diags, "R031"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_inline_if_modifier() {
+        // `puts x if condition` — inline if, no `end` needed
+        let diags = check("puts x if condition");
+        assert!(!has_rule(&diags, "R031"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_inline_unless_modifier() {
+        let diags = check("return if done\nreturn unless ready");
+        assert!(!has_rule(&diags, "R031"), "{diags:?}");
+    }
+
+    // --- R032: redundant return ---
+
+    #[test]
+    fn violation_return_on_last_line() {
+        let src = "def foo\n  return 42\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R032"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_early_return() {
+        let src = "def foo\n  return if done\n  do_work\nend";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R032"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_implicit_return() {
+        let src = "def foo\n  42\nend";
+        assert!(!has_rule(&check(src), "R032"));
+    }
+}
