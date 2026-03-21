@@ -7,6 +7,7 @@ mod style;
 mod syntax;
 mod trailing_whitespace;
 
+use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::lexer::Token;
 
@@ -32,15 +33,21 @@ pub trait Rule {
     fn check(&self, ctx: &LintContext<'_>) -> Vec<Diagnostic>;
 }
 
-/// Returns all built-in rules
-pub fn all_rules() -> Vec<Box<dyn Rule + Send + Sync>> {
+/// Returns all built-in rules configured with the given config
+pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
     vec![
-        Box::new(LineLengthRule::default()),
+        Box::new(LineLengthRule {
+            max_length: config.line_length,
+        }),
         Box::new(TrailingWhitespaceRule),
         Box::new(FrozenStringLiteralRule),
         Box::new(NamingRule),
         Box::new(StyleRule),
         Box::new(SyntaxRule),
-        Box::new(ComplexityRule),
+        Box::new(ComplexityRule {
+            max_method_lines: config.max_method_lines,
+            max_class_lines: config.max_class_lines,
+            max_complexity: config.max_complexity,
+        }),
     ]
 }
