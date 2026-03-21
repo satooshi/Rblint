@@ -347,6 +347,7 @@ fn fix_single_op(line: &str, op: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diagnostic::FixKind;
     use crate::lexer::Lexer;
 
     fn check(source: &str) -> Vec<Diagnostic> {
