@@ -109,15 +109,19 @@ fn compile_exclude_patterns(raw: &[String]) -> Vec<glob::Pattern> {
         .collect()
 }
 
+/// Strip the leading "./" prefix so that exclude glob patterns like
+/// "vendor/**" match paths yielded as "./vendor/foo.rb".
+fn normalize_path(raw: &str) -> &str {
+    raw.strip_prefix("./").unwrap_or(raw)
+}
+
 fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<String> {
     let mut files = Vec::new();
     for path in paths {
         let meta = std::fs::metadata(path);
         if let Ok(m) = meta {
             if m.is_file() {
-                // Normalize explicit file paths the same way as WalkDir-discovered
-                // ones, so that exclude patterns like "vendor/**" match "./vendor/foo.rb".
-                let normalized = path.strip_prefix("./").unwrap_or(path);
+                let normalized = normalize_path(path);
                 if !is_excluded(normalized, exclude) {
                     files.push(normalized.to_string());
                 }
@@ -137,15 +141,10 @@ fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<String
                             || name.ends_with(".gemspec")
                             || name == "Guardfile"
                         {
-                            // Strip leading "./" so that exclude patterns like
-                            // "vendor/**" match paths yielded as "./vendor/foo.rb".
                             let raw = p.to_string_lossy();
-                            let path_str = raw
-                                .strip_prefix("./")
-                                .map(|s| s.to_string())
-                                .unwrap_or_else(|| raw.into_owned());
-                            if !is_excluded(&path_str, exclude) {
-                                files.push(path_str);
+                            let path_str = normalize_path(&raw);
+                            if !is_excluded(path_str, exclude) {
+                                files.push(path_str.to_string());
                             }
                         }
                     }
