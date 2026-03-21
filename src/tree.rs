@@ -40,7 +40,7 @@ impl TreeBuilder {
         let stmt_starts = Self::precompute_statement_starts(tokens);
         let mut idx = 0;
         let mut roots = Vec::new();
-        Self::parse_level(tokens, &mut idx, &mut roots, &stmt_starts);
+        Self::parse_level(tokens, &mut idx, &mut roots, &stmt_starts, true);
         roots
     }
 
@@ -71,12 +71,25 @@ impl TreeBuilder {
         result
     }
 
-    fn parse_level(tokens: &[Token], idx: &mut usize, out: &mut Vec<Node>, stmt_starts: &[bool]) {
+    fn parse_level(
+        tokens: &[Token],
+        idx: &mut usize,
+        out: &mut Vec<Node>,
+        stmt_starts: &[bool],
+        is_root: bool,
+    ) {
         while *idx < tokens.len() {
             let tok = &tokens[*idx];
 
             match &tok.kind {
-                TokenKind::End => return,
+                TokenKind::End => {
+                    if is_root {
+                        // Unexpected/extra `end` at root level — skip to recover
+                        *idx += 1;
+                        continue;
+                    }
+                    return;
+                }
 
                 TokenKind::Def => out.push(Self::parse_def(tokens, idx, stmt_starts)),
                 TokenKind::Class => {
@@ -100,12 +113,17 @@ impl TreeBuilder {
                     NodeKind::Case,
                     stmt_starts,
                 )),
-                // `do` in `while/for do...end` is just a separator — skip it.
-                // Standalone do-blocks (method call blocks) are not modeled
-                // in this lightweight AST.
-                TokenKind::Do => {
-                    *idx += 1;
-                }
+                // Standalone `do...end` blocks (e.g., method call blocks like
+                // `items.each do ... end`) are modeled as Block nodes so that
+                // their `end` does not prematurely close the enclosing construct.
+                // The optional `do` in `while/for ... do ... end` is consumed
+                // inside `consume_until_end` before reaching this arm.
+                TokenKind::Do => out.push(Self::parse_anonymous(
+                    tokens,
+                    idx,
+                    NodeKind::Block,
+                    stmt_starts,
+                )),
 
                 // `for` is always a block form in Ruby (needs `end`)
                 TokenKind::For => out.push(Self::parse_anonymous(
@@ -237,7 +255,7 @@ impl TreeBuilder {
         children: &mut Vec<Node>,
         stmt_starts: &[bool],
     ) -> usize {
-        Self::parse_level(tokens, idx, children, stmt_starts);
+        Self::parse_level(tokens, idx, children, stmt_starts, false);
 
         if *idx < tokens.len() {
             let end_line = tokens[*idx].line;
@@ -373,5 +391,27 @@ mod tests {
         let nodes = build("case x\nwhen 1\n  y\nend\n");
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].kind, NodeKind::Case);
+    }
+
+    #[test]
+    fn do_block_inside_method() {
+        let src = "def foo\n  items.each do\n    x\n  end\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::Method);
+        assert_eq!(nodes[0].name.as_deref(), Some("foo"));
+        assert_eq!(nodes[0].end_line, 5);
+        assert_eq!(nodes[0].children.len(), 1);
+        assert_eq!(nodes[0].children[0].kind, NodeKind::Block);
+    }
+
+    #[test]
+    fn extra_end_at_root_recovers() {
+        // An unexpected `end` at root level should be skipped, not stop parsing
+        let src = "end\ndef foo\nend\n";
+        let nodes = build(src);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].kind, NodeKind::Method);
+        assert_eq!(nodes[0].name.as_deref(), Some("foo"));
     }
 }
