@@ -1,16 +1,16 @@
 [package]
-name = "rlint"
+name = "rblint"
 version = "0.1.0"
 edition = "2021"
 description = "A fast Ruby linter written in Rust"
 license = "MIT"
 
 [[bin]]
-name = "rlint"
+name = "rblint"
 path = "src/main.rs"
 
 [lib]
-name = "rlint"
+name = "rblint"
 path = "src/lib.rs"
 
 [dependencies]

@@ -1,4 +1,4 @@
-# Rlint — Ruff for Ruby
+# Rblint — Ruff for Ruby
 
 A fast Ruby linter written in Rust, inspired by [Ruff](https://github.com/astral-sh/ruff).
 
@@ -14,38 +14,38 @@ A fast Ruby linter written in Rust, inspired by [Ruff](https://github.com/astral
 
 ```sh
 cargo build --release
-# Binary at: target/release/rlint
+# Binary at: target/release/rblint
 ```
 
 ## Usage
 
 ```sh
 # Lint current directory
-rlint
+rblint
 
 # Lint specific files or directories
-rlint app/ lib/ spec/
+rblint app/ lib/ spec/
 
 # Show fix suggestions
-rlint --fix app/
+rblint --fix app/
 
 # JSON output (for editors/CI)
-rlint --format json app/
+rblint --format json app/
 
 # GitHub Actions annotations
-rlint --format github app/
+rblint --format github app/
 
 # Only errors, no warnings
-rlint --errors-only app/
+rblint --errors-only app/
 
 # Select specific rules
-rlint --select R001,R002,R003 app/
+rblint --select R001,R002,R003 app/
 
 # Ignore rules
-rlint --ignore R003,R021 app/
+rblint --ignore R003,R021 app/
 
 # Show statistics
-rlint --statistics app/
+rblint --statistics app/
 ```
 
 ## Rules

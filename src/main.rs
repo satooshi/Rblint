@@ -3,8 +3,8 @@ use rayon::prelude::*;
 use std::time::Instant;
 use walkdir::WalkDir;
 
-use rlint::linter::Linter;
-use rlint::reporter::{OutputFormat, Reporter};
+use rblint::linter::Linter;
+use rblint::reporter::{OutputFormat, Reporter};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -15,11 +15,11 @@ enum Format {
 
 #[derive(Parser)]
 #[command(
-    name = "rlint",
+    name = "rblint",
     about = "A fast Ruby linter written in Rust",
     version = env!("CARGO_PKG_VERSION"),
     long_about = "
-Rlint — Ruff for Ruby
+Rblint — Ruff for Ruby
 
 A fast, opinionated Ruby linter inspired by Ruff (Python).
 Checks your Ruby code for style issues, naming conventions,
@@ -146,7 +146,7 @@ fn main() {
     }
 
     // Lint files in parallel
-    let all_diags: Vec<(String, Vec<rlint::diagnostic::Diagnostic>)> = files
+    let all_diags: Vec<(String, Vec<rblint::diagnostic::Diagnostic>)> = files
         .par_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(path).ok()?;
@@ -164,7 +164,7 @@ fn main() {
                         return false;
                     }
                 }
-                if cli.errors_only && d.severity != rlint::diagnostic::Severity::Error {
+                if cli.errors_only && d.severity != rblint::diagnostic::Severity::Error {
                     return false;
                 }
                 true
@@ -174,7 +174,7 @@ fn main() {
         })
         .collect();
 
-    let mut flat_diags: Vec<rlint::diagnostic::Diagnostic> = all_diags
+    let mut flat_diags: Vec<rblint::diagnostic::Diagnostic> = all_diags
         .iter()
         .flat_map(|(_, d)| d.iter())
         .cloned()
@@ -193,13 +193,13 @@ fn main() {
     if !cli.no_fail
         && flat_diags
             .iter()
-            .any(|d| d.severity == rlint::diagnostic::Severity::Error)
+            .any(|d| d.severity == rblint::diagnostic::Severity::Error)
     {
         std::process::exit(1);
     }
 }
 
-fn print_statistics(diags: &[rlint::diagnostic::Diagnostic]) {
+fn print_statistics(diags: &[rblint::diagnostic::Diagnostic]) {
     use std::collections::HashMap;
     let mut counts: HashMap<&str, usize> = HashMap::new();
     for d in diags {
