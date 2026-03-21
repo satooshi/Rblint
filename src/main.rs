@@ -204,12 +204,7 @@ fn lint_files(
                     let fresh = linter.lint_file(path, &source);
                     {
                         let mut c = cache_mutex.lock().unwrap();
-                        c.store(
-                            PathBuf::from(path),
-                            content_hash,
-                            config_hash,
-                            &fresh,
-                        );
+                        c.store(PathBuf::from(path), content_hash, config_hash, &fresh);
                     }
                     fresh
                 }
@@ -500,11 +495,8 @@ fn run_watch_mode(
         }
     }
 
-    let mut watcher = RecommendedWatcher::new(
-        ChannelHandler(tx),
-        NConfig::default(),
-    )
-    .expect("Failed to create file watcher");
+    let mut watcher = RecommendedWatcher::new(ChannelHandler(tx), NConfig::default())
+        .expect("Failed to create file watcher");
 
     for path in watch_paths {
         let p = std::path::Path::new(path);
@@ -567,19 +559,14 @@ fn run_watch_mode(
                 while rx.try_recv().is_ok() {}
 
                 // Re-collect full file list in case files were added/removed
-                let files = collect_ruby_files(
-                    watch_paths,
-                    exclude_patterns,
-                );
+                let files = collect_ruby_files(watch_paths, exclude_patterns);
 
                 if files.is_empty() {
                     eprintln!("No Ruby files found.");
                 } else {
                     // Only re-lint the changed files that exist in the full list
-                    let relint_targets: Vec<String> = changed
-                        .into_iter()
-                        .filter(|f| files.contains(f))
-                        .collect();
+                    let relint_targets: Vec<String> =
+                        changed.into_iter().filter(|f| files.contains(f)).collect();
 
                     let targets = if relint_targets.is_empty() {
                         // Removed file or new file — re-lint everything

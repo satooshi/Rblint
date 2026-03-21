@@ -70,7 +70,14 @@ fn cached_to_diagnostic(file: &str, c: CachedDiagnostic) -> Diagnostic {
     // allocation; for a CLI tool this is fine — the number of unique rule codes
     // is tiny and bounded.
     let rule: &'static str = Box::leak(c.rule.into_boxed_str());
-    let mut d = Diagnostic::new(file, c.line, c.col, rule, c.message, u8_to_severity(c.severity));
+    let mut d = Diagnostic::new(
+        file,
+        c.line,
+        c.col,
+        rule,
+        c.message,
+        u8_to_severity(c.severity),
+    );
     if let Some(fix) = c.fix {
         if fix.insert_before {
             d = d.with_insert_before_fix(fix.text);
