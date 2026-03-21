@@ -289,8 +289,7 @@ fn run_lint_pass(
             cache,
             config_hash,
         );
-        let relinted_set: HashSet<&str> =
-            fixed_files.iter().map(|s| s.as_str()).collect();
+        let relinted_set: HashSet<&str> = fixed_files.iter().map(|s| s.as_str()).collect();
         let mut merged: Vec<(String, Vec<Diagnostic>)> = all_diags
             .into_iter()
             .filter(|(p, _)| !relinted_set.contains(p.as_str()))
@@ -570,8 +569,7 @@ fn run_watch_mode(
                 // Reload config and rebuild linter when .rlint.toml changes
                 if config_changed {
                     eprintln!("[.rlint.toml changed, reloading config]");
-                    let cwd =
-                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                     let new_config = rblint::config::Config::load(&cwd);
                     current_config_hash = hash_config(&new_config);
                     current_linter = Linter::with_config(&new_config);
