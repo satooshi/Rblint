@@ -36,7 +36,7 @@ fn split_deduplicated_fixes(diags: &[Diagnostic]) -> (Vec<&Diagnostic>, Vec<&Dia
 /// Original line endings (LF or CRLF) are detected from the first newline and preserved.
 pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> (String, usize) {
     let ends_with_newline = source.ends_with('\n');
-    let uses_crlf = source.find('\n').map_or(false, |i| {
+    let uses_crlf = source.find('\n').is_some_and(|i| {
         source.as_bytes().get(i.wrapping_sub(1)) == Some(&b'\r')
     });
     let line_ending = if uses_crlf { "\r\n" } else { "\n" };

@@ -205,7 +205,7 @@ fn main() {
     let selected = cli
         .select
         .as_deref()
-        .and_then(|s| rlint::linter::parse_rule_list(s));
+        .and_then(rlint::linter::parse_rule_list);
 
     // --ignore appends to config.ignore
     if let Some(ign_str) = &cli.ignore {
