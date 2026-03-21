@@ -206,23 +206,44 @@ fn main() {
     let cli = Cli::parse();
     let start = Instant::now();
 
-    // Handle --migrate-config: read .rubocop.yml and print .rlint.toml
+    // Handle --migrate-config: find .rubocop.yml by walking up from CWD
     if cli.migrate_config {
         let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let rubocop_path = cwd.join(".rubocop.yml");
-        if !rubocop_path.exists() {
-            eprintln!("Error: .rubocop.yml not found in {}", cwd.display());
-            std::process::exit(1);
-        }
-        match rubocop_compat::load_rubocop_yml(&rubocop_path) {
-            Some(rubocop_cfg) => {
-                let config = rubocop_compat::convert_to_config(&rubocop_cfg);
-                print!("{}", rubocop_compat::generate_rlint_toml(&config));
+        let canonical_cwd = std::fs::canonicalize(&cwd).unwrap_or_else(|_| cwd.clone());
+        let rubocop_path = {
+            let mut found: Option<std::path::PathBuf> = None;
+            let mut dir: &std::path::Path = &canonical_cwd;
+            loop {
+                let candidate = dir.join(".rubocop.yml");
+                if candidate.exists() {
+                    found = Some(candidate);
+                    break;
+                }
+                match dir.parent() {
+                    Some(p) => dir = p,
+                    None => break,
+                }
             }
+            found
+        };
+        match rubocop_path {
             None => {
-                eprintln!("Error: Failed to parse .rubocop.yml");
+                eprintln!(
+                    "Error: .rubocop.yml not found in {} or any parent directory",
+                    cwd.display()
+                );
                 std::process::exit(1);
             }
+            Some(path) => match rubocop_compat::load_rubocop_yml(&path) {
+                Some(rubocop_cfg) => {
+                    let config = rubocop_compat::convert_to_config(&rubocop_cfg);
+                    print!("{}", rubocop_compat::generate_rlint_toml(&config));
+                }
+                None => {
+                    eprintln!("Error: Failed to parse .rubocop.yml");
+                    std::process::exit(1);
+                }
+            },
         }
         return;
     }

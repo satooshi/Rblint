@@ -64,11 +64,8 @@ pub struct RuboCopConfig {
 // Parsing
 // ---------------------------------------------------------------------------
 
-/// Load and parse a `.rubocop.yml` file from `path`.
-///
-/// Returns `None` on I/O or YAML parse errors (with a warning printed to
-/// stderr).
-pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
+/// Load and parse a single `.rubocop.yml` file from `path` (no inherit_from).
+fn load_rubocop_yml_raw(path: &Path) -> Option<RuboCopConfig> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
@@ -83,6 +80,56 @@ pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
             None
         }
     }
+}
+
+/// Load and parse a `.rubocop.yml` file from `path`, resolving `inherit_from`
+/// references.  Inherited files are merged first; the main file wins on
+/// conflicts.  Returns `None` on I/O or YAML parse errors.
+pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+
+    // Parse the main file first so we can inspect `inherit_from`.
+    let main = load_rubocop_yml_raw(path)?;
+
+    // Collect inherit_from entries (string or array of strings).
+    let inherited_paths: Vec<std::path::PathBuf> = main
+        .cops
+        .get("inherit_from")
+        .map(|v| match v {
+            serde_yml::Value::String(s) => vec![base_dir.join(s)],
+            serde_yml::Value::Sequence(seq) => seq
+                .iter()
+                .filter_map(|item| {
+                    if let serde_yml::Value::String(s) = item {
+                        Some(base_dir.join(s))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            _ => vec![],
+        })
+        .unwrap_or_default();
+
+    if inherited_paths.is_empty() {
+        return Some(main);
+    }
+
+    // Merge: start with inherited files (in order), then overlay main.
+    let mut merged = RuboCopConfig::default();
+    for inh_path in &inherited_paths {
+        if let Some(inh_cfg) = load_rubocop_yml_raw(inh_path) {
+            for (k, v) in inh_cfg.cops {
+                merged.cops.entry(k).or_insert(v);
+            }
+        }
+    }
+    // Main file wins — overwrite any key set by inherited files.
+    for (k, v) in main.cops {
+        merged.cops.insert(k, v);
+    }
+
+    Some(merged)
 }
 
 // ---------------------------------------------------------------------------
@@ -125,8 +172,26 @@ fn value_to_cop_config(val: &serde_yml::Value) -> CopConfig {
 ///
 /// Rules whose cop has `Enabled: false` are added to `config.ignore`.
 /// Known `Max` thresholds are mapped to the corresponding Rblint setting.
+/// `AllCops: Exclude` patterns are mapped to `config.exclude`.
 pub fn convert_to_config(rubocop: &RuboCopConfig) -> Config {
     let mut config = Config::default();
+
+    // Extract AllCops.Exclude patterns into config.exclude
+    if let Some(serde_yml::Value::Mapping(all_cops_map)) = rubocop.cops.get("AllCops") {
+        for (k, v) in all_cops_map {
+            if let serde_yml::Value::String(key) = k {
+                if key == "Exclude" {
+                    if let serde_yml::Value::Sequence(seq) = v {
+                        for item in seq {
+                            if let serde_yml::Value::String(pattern) = item {
+                                config.exclude.push(pattern.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     for (cop_name, raw_val) in &rubocop.cops {
         let cop_cfg = value_to_cop_config(raw_val);
@@ -179,9 +244,10 @@ pub fn generate_rlint_toml(config: &Config) -> String {
         lines.push(format!("max-complexity = {}", config.max_complexity));
     }
 
+    let escape_toml_str = |s: &str| -> String { s.replace('\\', "\\\\").replace('"', "\\\"") };
     let fmt_list = |v: &[String]| -> String {
         v.iter()
-            .map(|r| format!("\"{}\"", r))
+            .map(|r| format!("\"{}\"", escape_toml_str(r)))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -190,6 +256,12 @@ pub fn generate_rlint_toml(config: &Config) -> String {
     }
     if !config.select.is_empty() {
         lines.push(format!("select = [{}]", fmt_list(&config.select)));
+    }
+    if !config.extend_select.is_empty() {
+        lines.push(format!(
+            "extend-select = [{}]",
+            fmt_list(&config.extend_select)
+        ));
     }
     if !config.exclude.is_empty() {
         lines.push(format!("exclude = [{}]", fmt_list(&config.exclude)));
