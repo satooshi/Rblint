@@ -10,6 +10,7 @@ mod trailing_whitespace;
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::lexer::Token;
+use crate::tree::Node;
 
 pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
@@ -25,6 +26,7 @@ pub struct LintContext<'a> {
     pub source: &'a str,
     pub lines: &'a [&'a str],
     pub tokens: &'a [Token],
+    pub nodes: &'a [Node],
 }
 
 /// Trait implemented by every lint rule

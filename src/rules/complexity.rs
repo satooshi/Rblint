@@ -203,13 +203,16 @@ mod tests {
     use crate::lexer::Lexer;
 
     fn check(source: &str) -> Vec<Diagnostic> {
+        use crate::tree::TreeBuilder;
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
+        let nodes = TreeBuilder::build(&tokens);
         let ctx = LintContext {
             file: "test.rb",
             source,
             lines: &lines,
             tokens: &tokens,
+            nodes: &nodes,
         };
         ComplexityRule::default().check(&ctx)
     }

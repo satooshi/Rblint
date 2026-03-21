@@ -5,3 +5,4 @@ pub mod lexer;
 pub mod linter;
 pub mod reporter;
 pub mod rules;
+pub mod tree;

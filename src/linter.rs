@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::lexer::{Lexer, TokenKind};
 use crate::rules::{all_rules, LintContext};
+use crate::tree::TreeBuilder;
 
 pub struct Linter {
     rules: Vec<Box<dyn crate::rules::Rule + Send + Sync>>,
@@ -29,12 +30,14 @@ impl Linter {
     pub fn lint_file(&self, path: &str, source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
+        let nodes = TreeBuilder::build(&tokens);
 
         let ctx = LintContext {
             file: path,
             source,
             lines: &lines,
             tokens: &tokens,
+            nodes: &nodes,
         };
 
         let mut diags: Vec<Diagnostic> = self
