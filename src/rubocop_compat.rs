@@ -39,10 +39,10 @@ pub fn cop_to_rule(cop: &str) -> Option<&'static str> {
 
 /// A single cop's configuration block.
 #[derive(Debug, Default)]
-pub struct CopConfig {
-    pub enabled: Option<bool>,
+struct CopConfig {
+    enabled: Option<bool>,
     /// Generic `Max` threshold used by several cops (e.g. LineLength, MethodLength).
-    pub max: Option<u64>,
+    max: Option<u64>,
 }
 
 /// Top-level `.rubocop.yml` structure.
@@ -187,17 +187,20 @@ pub fn generate_rlint_toml(config: &Config) -> String {
         lines.push(format!("max-complexity = {}", config.max_complexity));
     }
 
+    let fmt_list = |v: &[String]| -> String {
+        v.iter()
+            .map(|r| format!("\"{}\"", r))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if !config.ignore.is_empty() {
-        let quoted: Vec<String> = config.ignore.iter().map(|r| format!("\"{}\"", r)).collect();
-        lines.push(format!("ignore = [{}]", quoted.join(", ")));
+        lines.push(format!("ignore = [{}]", fmt_list(&config.ignore)));
     }
     if !config.select.is_empty() {
-        let quoted: Vec<String> = config.select.iter().map(|r| format!("\"{}\"", r)).collect();
-        lines.push(format!("select = [{}]", quoted.join(", ")));
+        lines.push(format!("select = [{}]", fmt_list(&config.select)));
     }
     if !config.exclude.is_empty() {
-        let quoted: Vec<String> = config.exclude.iter().map(|r| format!("\"{}\"", r)).collect();
-        lines.push(format!("exclude = [{}]", quoted.join(", ")));
+        lines.push(format!("exclude = [{}]", fmt_list(&config.exclude)));
     }
 
     if lines.is_empty() {
