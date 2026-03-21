@@ -263,9 +263,7 @@ impl Rule for StyleRule {
         for i in 0..ctx.lines.len().saturating_sub(1) {
             let current = ctx.lines[i].trim();
             let next = ctx.lines[i + 1].trim();
-            if current == "end"
-                && (next.starts_with("def ") || next == "def")
-            {
+            if current == "end" && (next.starts_with("def ") || next == "def") {
                 // Warn on the `def` line (i+2 is 1-based)
                 diags.push(
                     Diagnostic::new(
@@ -449,7 +447,10 @@ mod tests {
     fn fix_operator_spacing_eq_eq() {
         let diags = check("x==y");
         let fix = fix_for_rule(&diags, "R021").expect("should have fix");
-        assert!(fix.contains("x == y") || fix.contains("x==y "), "fix: {fix}");
+        assert!(
+            fix.contains("x == y") || fix.contains("x==y "),
+            "fix: {fix}"
+        );
     }
 
     // --- R022: trailing comma ---
