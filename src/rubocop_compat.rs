@@ -72,22 +72,14 @@ pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to read {}: {}",
-                path.display(),
-                e
-            );
+            eprintln!("Warning: Failed to read {}: {}", path.display(), e);
             return None;
         }
     };
     match serde_yml::from_str::<RuboCopConfig>(&content) {
         Ok(cfg) => Some(cfg),
         Err(e) => {
-            eprintln!(
-                "Warning: Failed to parse {}: {}",
-                path.display(),
-                e
-            );
+            eprintln!("Warning: Failed to parse {}: {}", path.display(), e);
             None
         }
     }
@@ -224,7 +216,10 @@ mod tests {
     fn known_cops_map_to_rules() {
         assert_eq!(cop_to_rule("Layout/LineLength"), Some("R001"));
         assert_eq!(cop_to_rule("Layout/TrailingWhitespace"), Some("R002"));
-        assert_eq!(cop_to_rule("Style/FrozenStringLiteralComment"), Some("R003"));
+        assert_eq!(
+            cop_to_rule("Style/FrozenStringLiteralComment"),
+            Some("R003")
+        );
         assert_eq!(cop_to_rule("Naming/MethodName"), Some("R010"));
         assert_eq!(cop_to_rule("Naming/ConstantName"), Some("R011"));
         assert_eq!(cop_to_rule("Style/Semicolon"), Some("R020"));
@@ -410,7 +405,10 @@ SomeGem/CustomCop:
         assert_eq!(cfg.max_complexity, 8);
 
         // Disabled cops → ignored rules
-        assert!(cfg.ignore.contains(&"R003".to_string()), "R003 should be ignored");
+        assert!(
+            cfg.ignore.contains(&"R003".to_string()),
+            "R003 should be ignored"
+        );
 
         // Enabled cops should NOT be in ignore
         assert!(!cfg.ignore.contains(&"R002".to_string()));
