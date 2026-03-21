@@ -23,10 +23,20 @@ impl Rule for FrozenStringLiteralRule {
             .any(|l| l.contains("frozen_string_literal: true"));
 
         if !has_frozen {
-            // If line 1 is a shebang, insert after it (before line 2) to avoid
-            // moving the shebang off the first line and breaking executability.
+            // If line 1 is a shebang, insert after it to avoid moving the shebang
+            // off the first line and breaking executability.
+            // If line 2 is an encoding magic comment (# encoding:/# coding:), insert
+            // after it as well so the encoding comment stays within Ruby's detection window.
             let has_shebang = ctx.lines.first().is_some_and(|l| l.starts_with("#!"));
-            let insert_line = if has_shebang { 2 } else { 1 };
+            let insert_line = if has_shebang {
+                let line2_is_encoding = ctx.lines.get(1).is_some_and(|l| {
+                    let t = l.trim_start_matches('#').trim();
+                    t.starts_with("encoding:") || t.starts_with("coding:")
+                });
+                if line2_is_encoding { 3 } else { 2 }
+            } else {
+                1
+            };
             vec![Diagnostic::new(
                 ctx.file,
                 insert_line,
@@ -102,6 +112,20 @@ mod tests {
     fn violation_magic_comment_on_line_4() {
         let src = "# a\n# b\n# c\n# frozen_string_literal: true";
         assert_eq!(check(src).len(), 1);
+    }
+
+    #[test]
+    fn violation_shebang_and_encoding_inserts_after_encoding() {
+        // File has shebang + encoding comment; fix should insert at line 3
+        // to leave both shebang and encoding comment in place.
+        let src = "#!/usr/bin/env ruby\n# encoding: utf-8\nx = 1\n";
+        let diags = check(src);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].rule, "R003");
+        assert_eq!(
+            diags[0].line, 3,
+            "fix insertion point should be after encoding comment"
+        );
     }
 
     #[test]

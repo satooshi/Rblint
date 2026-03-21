@@ -131,7 +131,13 @@ fn collect_ruby_files(paths: &[String], exclude: &[glob::Pattern]) -> Vec<String
                             || name.ends_with(".gemspec")
                             || name == "Guardfile"
                         {
-                            let path_str = p.to_string_lossy().into_owned();
+                            // Strip leading "./" so that exclude patterns like
+                            // "vendor/**" match paths yielded as "./vendor/foo.rb".
+                            let raw = p.to_string_lossy();
+                            let path_str = raw
+                                .strip_prefix("./")
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| raw.into_owned());
                             if !is_excluded(&path_str, exclude) {
                                 files.push(path_str);
                             }

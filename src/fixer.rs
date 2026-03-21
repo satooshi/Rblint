@@ -91,7 +91,10 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         return Ok(0);
     }
 
-    let tmp_path = format!("{}.rlint_tmp", path);
+    // Use the process ID to make temp/backup names unique, avoiding conflicts
+    // with existing files or concurrent rlint processes.
+    let pid = std::process::id();
+    let tmp_path = format!("{}.rlint_{}.tmp", path, pid);
     std::fs::write(&tmp_path, &fixed)?;
     // Preserve original file permissions on the temp file before renaming.
     if let Ok(meta) = std::fs::metadata(path) {
@@ -104,7 +107,7 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
         // This is not atomic on Windows (there is a brief gap between the two renames),
         // but restores the original if the second rename fails.
         if e.kind() == std::io::ErrorKind::AlreadyExists {
-            let bak_path = format!("{}.rlint_bak", path);
+            let bak_path = format!("{}.rlint_{}.bak", path, pid);
             if let Err(bak_err) = std::fs::rename(path, &bak_path) {
                 let _ = std::fs::remove_file(&tmp_path);
                 return Err(bak_err);
