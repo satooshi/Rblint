@@ -11,7 +11,7 @@ fn leading_whitespace(line: &str) -> &str {
     &line[..line.len() - trimmed.len()]
 }
 
-/// Returns true if the character position `col` (0-based byte index) in `line`
+/// Returns true if the character position `col` (0-based byte offset) in `line`
 /// is inside a string literal.
 fn is_inside_string(line: &str, col: usize) -> bool {
     let mut in_string = false;
@@ -53,11 +53,17 @@ impl Rule for StyleRule {
         // Skip semicolons inside string literals.
         for tok in tokens {
             if tok.kind == TokenKind::Semicolon {
-                // tok.col is 1-based; convert to 0-based for is_inside_string
+                // tok.col is 1-based character column; convert to 0-based byte offset
                 let line_idx = tok.line.saturating_sub(1);
                 let line = ctx.lines.get(line_idx).copied().unwrap_or("");
-                let col0 = tok.col.saturating_sub(1);
-                if is_inside_string(line, col0) {
+                // Convert 1-based char column to byte offset for is_inside_string
+                let col_char = tok.col.saturating_sub(1);
+                let col_byte = line
+                    .char_indices()
+                    .nth(col_char)
+                    .map(|(b, _)| b)
+                    .unwrap_or(line.len());
+                if is_inside_string(line, col_byte) {
                     continue;
                 }
                 let mut diag = Diagnostic::new(
@@ -68,10 +74,11 @@ impl Rule for StyleRule {
                     "Avoid using semicolons to separate statements; use a newline instead",
                     Severity::Warning,
                 );
-                // Build fix: split on first semicolon, indent second statement
+                // Build fix: split at the token's semicolon position, indent second statement
                 let indent = leading_whitespace(line);
-                // Find the semicolon in the raw line (col is 1-based)
-                if let Some(semi_pos) = line.find(';') {
+                // Use the token's byte position (col_byte) to locate the exact semicolon
+                let semi_pos = col_byte;
+                if semi_pos < line.len() && line.as_bytes().get(semi_pos) == Some(&b';') {
                     let before = line[..semi_pos].trim_end();
                     let after = line[semi_pos + 1..].trim_start();
                     if !after.is_empty() {
@@ -242,7 +249,13 @@ impl Rule for StyleRule {
         if !ctx.source.is_empty() && !ctx.source.ends_with('\n') {
             let last_line = ctx.lines.len();
             let last_line_content = ctx.lines.last().copied().unwrap_or("").to_string();
-            let fixed = format!("{}\n", last_line_content);
+            // Preserve the file's existing line ending style
+            let line_ending = if ctx.source.contains("\r\n") {
+                "\r\n"
+            } else {
+                "\n"
+            };
+            let fixed = format!("{}{}", last_line_content, line_ending);
             diags.push(
                 Diagnostic::new(
                     ctx.file,
@@ -259,11 +272,23 @@ impl Rule for StyleRule {
         // R026: Missing blank line between method definitions
         // When `end` of one method is immediately followed by `def` of the next method
         // (with no blank line between), warn and insert a blank line.
-        // We look at line-level patterns: an "end" line followed directly by a "def" line.
+        // We look at line-level patterns: an "end" line followed directly by a "def" line
+        // at the same indentation level (to avoid false positives like `class A\nend\ndef foo`).
         for i in 0..ctx.lines.len().saturating_sub(1) {
-            let current = ctx.lines[i].trim();
-            let next = ctx.lines[i + 1].trim();
-            if current == "end" && (next.starts_with("def ") || next == "def") {
+            let current = ctx.lines[i];
+            let next = ctx.lines[i + 1];
+            let current_trimmed = current.trim();
+            let next_trimmed = next.trim();
+            if current_trimmed == "end"
+                && (next_trimmed.starts_with("def ") || next_trimmed == "def")
+            {
+                // Only fire if both lines share the same leading indentation,
+                // which indicates the `end` closes a method at the same level as the `def`.
+                let end_indent = leading_whitespace(current);
+                let def_indent = leading_whitespace(next);
+                if end_indent != def_indent {
+                    continue;
+                }
                 // Warn on the `def` line (i+2 is 1-based)
                 diags.push(
                     Diagnostic::new(
@@ -301,30 +326,39 @@ fn fix_operator_spacing(line: &str) -> String {
 
 /// Ensure spaces around `op` in `line`, skipping inside string literals.
 fn fix_single_op(line: &str, op: &str) -> String {
-    let op_len = op.len();
+    let op_len = op.len(); // byte length (all ops are ASCII)
     let mut out = String::with_capacity(line.len() + 4);
-    let bytes = line.as_bytes();
-    let mut i = 0;
+    // Collect (byte_offset, char) pairs so we can slice safely.
+    let chars: Vec<(usize, char)> = line.char_indices().collect();
+    let mut ci = 0; // index into `chars`
 
-    while i < bytes.len() {
-        // Check if we're inside a string at position i (crude but functional)
-        if is_inside_string(line, i) {
-            out.push(bytes[i] as char);
-            i += 1;
+    while ci < chars.len() {
+        let (byte_i, ch) = chars[ci];
+
+        // Check if we're inside a string at this byte position
+        if is_inside_string(line, byte_i) {
+            out.push(ch);
+            ci += 1;
             continue;
         }
 
-        if i + op_len <= bytes.len() && &line[i..i + op_len] == op {
-            // Don't double-space: check what's before/after
-            let before = if i > 0 { bytes[i - 1] } else { 0 };
-            let after = if i + op_len < bytes.len() {
-                bytes[i + op_len]
+        // Try to match `op` starting at byte_i (all ops are ASCII, so byte == char boundary)
+        if byte_i + op_len <= line.len() && &line[byte_i..byte_i + op_len] == op {
+            // Determine the byte before/after the operator
+            let before_byte = if byte_i > 0 {
+                line.as_bytes()[byte_i - 1]
+            } else {
+                0
+            };
+            let after_byte = if byte_i + op_len < line.len() {
+                line.as_bytes()[byte_i + op_len]
             } else {
                 0
             };
 
-            let need_space_before = before != b' ' && before != b'\t' && before != 0;
-            let need_space_after = after != b' ' && after != b'\t' && after != 0 && after != b'\n';
+            let need_space_before = before_byte != b' ' && before_byte != b'\t' && before_byte != 0;
+            let need_space_after =
+                after_byte != b' ' && after_byte != b'\t' && after_byte != 0 && after_byte != b'\n';
 
             if need_space_before {
                 out.push(' ');
@@ -333,10 +367,12 @@ fn fix_single_op(line: &str, op: &str) -> String {
             if need_space_after {
                 out.push(' ');
             }
-            i += op_len;
+            // Advance ci past the operator (op is ASCII so each byte == one char)
+            let op_char_count = op.chars().count();
+            ci += op_char_count;
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            out.push(ch);
+            ci += 1;
         }
     }
     out
@@ -447,10 +483,7 @@ mod tests {
     fn fix_operator_spacing_eq_eq() {
         let diags = check("x==y");
         let fix = fix_for_rule(&diags, "R021").expect("should have fix");
-        assert!(
-            fix.contains("x == y") || fix.contains("x==y "),
-            "fix: {fix}"
-        );
+        assert_eq!(fix, "x == y");
     }
 
     // --- R022: trailing comma ---
