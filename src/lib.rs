@@ -4,4 +4,5 @@ pub mod fixer;
 pub mod lexer;
 pub mod linter;
 pub mod reporter;
+pub mod rubocop_compat;
 pub mod rules;

@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::path::Path;
 
+use crate::rubocop_compat;
+
 /// Configuration loaded from `.rlint.toml`
 #[derive(Debug, Deserialize)]
 #[serde(default)]
@@ -52,7 +54,8 @@ impl Default for Config {
 
 impl Config {
     /// Walk up from `start_dir` looking for `.rlint.toml`.
-    /// Returns default config if none found.
+    /// If no `.rlint.toml` is found, falls back to `.rubocop.yml` in the same
+    /// directory hierarchy.  Returns default config if neither is found.
     pub fn load(start_dir: &Path) -> Self {
         // Canonicalize so that parent() traversal works reliably with relative paths
         // like "." where parent() would otherwise return None immediately.
@@ -76,12 +79,28 @@ impl Config {
                     }
                 }
             }
+
+            // Fall back to .rubocop.yml in the same directory
+            let rubocop_path = dir.join(".rubocop.yml");
+            if rubocop_path.exists() {
+                return Config::from_rubocop(&rubocop_path);
+            }
+
             match dir.parent() {
                 Some(p) => dir = p,
                 None => break,
             }
         }
         Config::default()
+    }
+
+    /// Load config from a `.rubocop.yml` file, converting known cops to Rblint settings.
+    /// Returns default config on parse error.
+    pub fn from_rubocop(path: &Path) -> Self {
+        match rubocop_compat::load_rubocop_yml(path) {
+            Some(rubocop) => rubocop_compat::convert_to_config(&rubocop),
+            None => Config::default(),
+        }
     }
 }
 

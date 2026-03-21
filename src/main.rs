@@ -7,6 +7,7 @@ use rblint::config::Config;
 use rblint::diagnostic::{Diagnostic, Severity};
 use rblint::linter::Linter;
 use rblint::reporter::{OutputFormat, Reporter};
+use rblint::rubocop_compat;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -94,6 +95,10 @@ struct Cli {
     /// Show statistics about rule violations
     #[arg(long)]
     statistics: bool,
+
+    /// Read .rubocop.yml and print an equivalent .rlint.toml to stdout
+    #[arg(long)]
+    migrate_config: bool,
 }
 
 /// Compile exclude glob patterns once, warning on invalid entries.
@@ -200,6 +205,27 @@ fn lint_files(
 fn main() {
     let cli = Cli::parse();
     let start = Instant::now();
+
+    // Handle --migrate-config: read .rubocop.yml and print .rlint.toml
+    if cli.migrate_config {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let rubocop_path = cwd.join(".rubocop.yml");
+        if !rubocop_path.exists() {
+            eprintln!("Error: .rubocop.yml not found in {}", cwd.display());
+            std::process::exit(1);
+        }
+        match rubocop_compat::load_rubocop_yml(&rubocop_path) {
+            Some(rubocop_cfg) => {
+                let config = rubocop_compat::convert_to_config(&rubocop_cfg);
+                print!("{}", rubocop_compat::generate_rlint_toml(&config));
+            }
+            None => {
+                eprintln!("Error: Failed to parse .rubocop.yml");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // Load config from .rlint.toml (walk up from CWD)
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
