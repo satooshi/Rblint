@@ -19,7 +19,6 @@ pub enum NodeKind {
     For,
     Case,
     Begin,
-    Do,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +52,11 @@ impl TreeBuilder {
         for (i, tok) in tokens.iter().enumerate() {
             match tok.kind {
                 TokenKind::Newline => {
+                    at_line_start = true;
+                }
+                // A semicolon acts like a statement separator: the next
+                // non-whitespace token is treated as a statement start.
+                TokenKind::Semicolon => {
                     at_line_start = true;
                 }
                 TokenKind::Whitespace | TokenKind::Comment => {}
@@ -96,12 +100,12 @@ impl TreeBuilder {
                     NodeKind::Case,
                     stmt_starts,
                 )),
-                TokenKind::Do => out.push(Self::parse_anonymous(
-                    tokens,
-                    idx,
-                    NodeKind::Do,
-                    stmt_starts,
-                )),
+                // `do` in `while/for do...end` is just a separator — skip it.
+                // Standalone do-blocks (method call blocks) are not modeled
+                // in this lightweight AST.
+                TokenKind::Do => {
+                    *idx += 1;
+                }
 
                 // `for` is always a block form in Ruby (needs `end`)
                 TokenKind::For => out.push(Self::parse_anonymous(
@@ -196,6 +200,12 @@ impl TreeBuilder {
     }
 
     /// Parse `if`/`unless`/`while`/`until`. Returns `None` for postfix forms.
+    ///
+    /// Known limitation: expression forms such as `x = if cond ... end` are
+    /// valid Ruby where `if` is not at a statement start, but this lightweight
+    /// approach will skip them (the `if` is not at a line/semicolon start so
+    /// `stmt_starts[*idx]` is false and we return `None`).  This is acceptable
+    /// for the structural rules this AST is designed for.
     fn parse_block_or_postfix(
         tokens: &[Token],
         idx: &mut usize,
@@ -244,7 +254,12 @@ impl TreeBuilder {
         tokens
             .iter()
             .skip(from)
-            .find(|t| !matches!(t.kind, TokenKind::Whitespace | TokenKind::Newline))
+            .find(|t| {
+                !matches!(
+                    t.kind,
+                    TokenKind::Whitespace | TokenKind::Newline | TokenKind::Comment
+                )
+            })
             .map(|t| t.text.clone())
             .unwrap_or_else(|| "<unknown>".into())
     }

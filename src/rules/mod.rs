@@ -20,13 +20,35 @@ pub use style::StyleRule;
 pub use syntax::SyntaxRule;
 pub use trailing_whitespace::TrailingWhitespaceRule;
 
-/// Context passed to each rule
+/// Context passed to each rule.
+///
+/// Marked `#[non_exhaustive]` so that adding fields in the future is not a
+/// breaking change for external rule implementations.
+#[non_exhaustive]
 pub struct LintContext<'a> {
     pub file: &'a str,
     pub source: &'a str,
     pub lines: &'a [&'a str],
     pub tokens: &'a [Token],
     pub nodes: &'a [Node],
+}
+
+impl<'a> LintContext<'a> {
+    pub fn new(
+        file: &'a str,
+        source: &'a str,
+        lines: &'a [&'a str],
+        tokens: &'a [Token],
+        nodes: &'a [Node],
+    ) -> Self {
+        Self {
+            file,
+            source,
+            lines,
+            tokens,
+            nodes,
+        }
+    }
 }
 
 /// Trait implemented by every lint rule
