@@ -1,4 +1,4 @@
-# This is a sample Ruby file with intentional issues for rlint demo
+# This is a sample Ruby file with intentional issues for rblint demo
 
 class myClass  # R011: constant should start with uppercase... wait, class names do
   MAX_SIZE = 100

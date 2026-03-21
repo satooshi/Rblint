@@ -1,14 +1,14 @@
-use rlint::diagnostic::Severity;
+use rblint::diagnostic::Severity;
 /// Integration tests: run Linter against fixture files and check diagnostics
-use rlint::linter::Linter;
+use rblint::linter::Linter;
 
-fn lint(path: &str) -> Vec<rlint::diagnostic::Diagnostic> {
+fn lint(path: &str) -> Vec<rblint::diagnostic::Diagnostic> {
     let source =
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("Cannot read {path}: {e}"));
     Linter::new().lint_file(path, &source)
 }
 
-fn has_rule(diags: &[rlint::diagnostic::Diagnostic], rule: &str) -> bool {
+fn has_rule(diags: &[rblint::diagnostic::Diagnostic], rule: &str) -> bool {
     diags.iter().any(|d| d.rule == rule)
 }
 

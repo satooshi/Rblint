@@ -3,10 +3,10 @@ use rayon::prelude::*;
 use std::time::Instant;
 use walkdir::WalkDir;
 
-use rlint::config::Config;
-use rlint::diagnostic::{Diagnostic, Severity};
-use rlint::linter::Linter;
-use rlint::reporter::{OutputFormat, Reporter};
+use rblint::config::Config;
+use rblint::diagnostic::{Diagnostic, Severity};
+use rblint::linter::Linter;
+use rblint::reporter::{OutputFormat, Reporter};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -17,11 +17,11 @@ enum Format {
 
 #[derive(Parser)]
 #[command(
-    name = "rlint",
+    name = "rblint",
     about = "A fast Ruby linter written in Rust",
     version = env!("CARGO_PKG_VERSION"),
     long_about = "
-Rlint — Ruff for Ruby
+Rblint — Ruff for Ruby
 
 A fast, opinionated Ruby linter inspired by Ruff (Python).
 Checks your Ruby code for style issues, naming conventions,
@@ -210,11 +210,11 @@ fn main() {
     let selected = cli
         .select
         .as_deref()
-        .and_then(rlint::linter::parse_rule_list);
+        .and_then(rblint::linter::parse_rule_list);
 
     // --ignore appends to config.ignore
     if let Some(ign_str) = &cli.ignore {
-        if let Some(extra) = rlint::linter::parse_rule_list(ign_str) {
+        if let Some(extra) = rblint::linter::parse_rule_list(ign_str) {
             config.ignore.extend(extra);
         }
     }
@@ -274,7 +274,7 @@ fn main() {
     let mut fixed_files: Vec<String> = Vec::new();
     if cli.fix {
         for (path, diags) in &all_diags {
-            match rlint::fixer::fix_file(path, diags) {
+            match rblint::fixer::fix_file(path, diags) {
                 Ok(0) => {}
                 Ok(n) => {
                     total_fixed += n;

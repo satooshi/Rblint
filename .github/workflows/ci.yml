@@ -54,4 +54,4 @@ jobs:
         run: cargo build --release
 
       - name: Show binary size
-        run: ls -lh target/release/rlint
+        run: ls -lh target/release/rblint
