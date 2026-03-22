@@ -1,13 +1,19 @@
 use clap::{Parser, ValueEnum};
 use rayon::prelude::*;
+use std::collections::HashSet;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use walkdir::WalkDir;
 
+use rblint::cache::{hash_config, hash_content, Cache};
 use rblint::config::Config;
 use rblint::diagnostic::{Diagnostic, Severity};
 use rblint::linter::Linter;
 use rblint::reporter::{OutputFormat, Reporter};
 use rblint::rubocop_compat;
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -98,6 +104,14 @@ struct Cli {
     #[arg(long)]
     statistics: bool,
 
+    /// Watch files for changes and re-lint automatically
+    #[arg(long)]
+    watch: bool,
+
+    /// Disable result caching
+    #[arg(long)]
+    no_cache: bool,
+
     /// Read .rubocop.yml and print an equivalent .rlint.toml to stdout
     #[arg(long)]
     migrate_config: bool,
@@ -171,18 +185,43 @@ fn is_excluded(path: &str, patterns: &[glob::Pattern]) -> bool {
 }
 
 /// Lint a set of files and apply rule filters, returning (path, diagnostics) pairs.
+/// When `cache` is `Some`, check the cache before linting and populate it after.
 fn lint_files(
     files: &[String],
     linter: &Linter,
     effective_select: &Option<Vec<String>>,
     effective_ignore: &Option<Vec<String>>,
     errors_only: bool,
+    cache: Option<&RwLock<Cache>>,
+    config_hash: u64,
 ) -> Vec<(String, Vec<Diagnostic>)> {
     files
         .par_iter()
         .filter_map(|path| {
             let source = std::fs::read_to_string(path).ok()?;
-            let mut diags = linter.lint_file(path, &source);
+            let content_hash = hash_content(&source);
+
+            // Attempt cache lookup (read lock for lookup, write lock only on miss)
+            let raw_diags: Vec<Diagnostic> = if let Some(cache_rw) = cache {
+                let hit = {
+                    let c = cache_rw.read().unwrap();
+                    c.lookup(std::path::Path::new(path), content_hash, config_hash)
+                };
+                if let Some(cached) = hit {
+                    cached
+                } else {
+                    let fresh = linter.lint_file(path, &source);
+                    {
+                        let mut c = cache_rw.write().unwrap();
+                        c.store(PathBuf::from(path), content_hash, config_hash, &fresh);
+                    }
+                    fresh
+                }
+            } else {
+                linter.lint_file(path, &source)
+            };
+
+            let mut diags = raw_diags;
             diags.retain(|d| {
                 if let Some(sel) = effective_select {
                     if !sel.iter().any(|r| d.rule.starts_with(r.as_str())) {
@@ -204,9 +243,102 @@ fn lint_files(
         .collect()
 }
 
+/// Run one full lint pass and print results.  Returns whether any errors were found.
+#[allow(clippy::too_many_arguments)]
+fn run_lint_pass(
+    files: &[String],
+    linter: &Linter,
+    reporter: &Reporter,
+    effective_select: &Option<Vec<String>>,
+    effective_ignore: &Option<Vec<String>>,
+    cli_errors_only: bool,
+    cli_fix: bool,
+    cli_statistics: bool,
+    cache: Option<&RwLock<Cache>>,
+    config_hash: u64,
+) -> bool {
+    let start = Instant::now();
+
+    // First lint pass (without errors_only filter when --fix is active)
+    let all_diags = lint_files(
+        files,
+        linter,
+        effective_select,
+        effective_ignore,
+        if cli_fix { false } else { cli_errors_only },
+        cache,
+        config_hash,
+    );
+
+    // Apply fixes when --fix is requested
+    let mut total_fixed = 0usize;
+    let mut fixed_files: Vec<String> = Vec::new();
+    if cli_fix {
+        for (path, diags) in &all_diags {
+            match rblint::fixer::fix_file(path, diags) {
+                Ok(0) => {}
+                Ok(n) => {
+                    total_fixed += n;
+                    fixed_files.push(path.clone());
+                }
+                Err(e) => eprintln!("Warning: could not fix {}: {}", path, e),
+            }
+        }
+    }
+
+    // Re-lint only the files that were actually modified, then merge with unchanged results.
+    let display_diags = if !fixed_files.is_empty() {
+        let relinted = lint_files(
+            &fixed_files,
+            linter,
+            effective_select,
+            effective_ignore,
+            cli_errors_only,
+            cache,
+            config_hash,
+        );
+        let relinted_set: HashSet<&str> = fixed_files.iter().map(|s| s.as_str()).collect();
+        let mut merged: Vec<(String, Vec<Diagnostic>)> = all_diags
+            .into_iter()
+            .filter(|(p, _)| !relinted_set.contains(p.as_str()))
+            .collect();
+        merged.extend(relinted);
+        merged
+    } else {
+        all_diags
+    };
+
+    let mut flat_diags: Vec<Diagnostic> = display_diags
+        .iter()
+        .flat_map(|(_, d)| d.iter())
+        .filter(|d| !cli_errors_only || d.severity == Severity::Error)
+        .cloned()
+        .collect();
+    flat_diags.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.col.cmp(&b.col))
+    });
+
+    reporter.print(&flat_diags);
+
+    let elapsed = start.elapsed().as_millis();
+    reporter.print_summary(&flat_diags, files.len(), elapsed);
+
+    if cli_fix && total_fixed > 0 {
+        eprintln!("Fixed {} violation(s).", total_fixed);
+    }
+
+    if cli_statistics {
+        print_statistics(&flat_diags);
+    }
+
+    flat_diags.iter().any(|d| d.severity == Severity::Error)
+}
+
 fn main() {
     let cli = Cli::parse();
-    let start = Instant::now();
 
     // Handle --migrate-config: find .rubocop.yml using provided path or CWD.
     // `cli.paths[0]` is the user-supplied path (defaults to ".").
@@ -241,28 +373,31 @@ fn main() {
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut config = Config::load(&cwd);
 
+    // .rblint_cache is always excluded so it never gets linted
+    config.exclude.push(".rblint_cache".to_string());
+
     // CLI flags override config file values
-    // --select overrides config.select entirely
-    let selected = cli
+    let cli_select = cli
         .select
         .as_deref()
         .and_then(rblint::linter::parse_rule_list);
 
-    // --ignore appends to config.ignore
-    if let Some(ign_str) = &cli.ignore {
-        if let Some(extra) = rblint::linter::parse_rule_list(ign_str) {
-            config.ignore.extend(extra);
-        }
-    }
+    // --ignore appends to config.ignore; also keep a copy for watch-mode reloads
+    let cli_ignore: Vec<String> = cli
+        .ignore
+        .as_deref()
+        .and_then(rblint::linter::parse_rule_list)
+        .unwrap_or_default();
+    config.ignore.extend(cli_ignore.clone());
 
-    let mut effective_select = selected.or_else(|| {
+    let mut effective_select = cli_select.clone().or_else(|| {
         if config.select.is_empty() {
             None
         } else {
             Some(config.select.clone())
         }
     });
-    // extend-select adds rules on top of the selected set (no-op when all rules are active)
+    // extend-select adds rules on top of the selected set
     if !config.extend_select.is_empty() {
         if let Some(ref mut sel) = effective_select {
             sel.extend(config.extend_select.iter().cloned());
@@ -284,7 +419,7 @@ fn main() {
 
     let reporter = Reporter {
         format,
-        show_fixes: !cli.fix, // when --fix is active, don't clutter output with fix hints
+        show_fixes: !cli.fix,
     };
     let linter = Linter::with_config(&config);
 
@@ -295,77 +430,272 @@ fn main() {
         return;
     }
 
-    // First lint pass (without errors_only filter when --fix is active, so that
-    // fixable warnings like R002/R003 are included in the fix set).
-    let all_diags = lint_files(
-        &files,
-        &linter,
-        &effective_select,
-        &effective_ignore,
-        if cli.fix { false } else { cli.errors_only },
-    );
+    // Compute config hash once (used for every cache lookup/store)
+    let config_hash = hash_config(&config);
 
-    // Apply fixes when --fix is requested
-    let mut total_fixed = 0usize;
-    let mut fixed_files: Vec<String> = Vec::new();
-    if cli.fix {
-        for (path, diags) in &all_diags {
-            match rblint::fixer::fix_file(path, diags) {
-                Ok(0) => {}
-                Ok(n) => {
-                    total_fixed += n;
-                    fixed_files.push(path.clone());
-                }
-                Err(e) => eprintln!("Warning: could not fix {}: {}", path, e),
-            }
-        }
-    }
-
-    // Re-lint only the files that were actually modified, then merge with unchanged results.
-    let display_diags = if !fixed_files.is_empty() {
-        let relinted = lint_files(
-            &fixed_files,
-            &linter,
+    // Optionally load cache
+    let cache_path = cwd.join(".rblint_cache");
+    let cache_lock: Option<RwLock<Cache>> = if cli.no_cache {
+        None
+    } else {
+        Some(RwLock::new(Cache::load(&cache_path)))
+    };
+    if cli.watch {
+        run_watch_mode(
+            &cli.paths,
+            &files,
+            &exclude_patterns,
+            &config,
+            &reporter,
+            &cli_select,
+            &cli_ignore,
             &effective_select,
             &effective_ignore,
             cli.errors_only,
+            cli.fix,
+            cli.statistics,
+            cache_lock.as_ref(),
+            config_hash,
         );
-        let relinted_set: std::collections::HashSet<&str> =
-            fixed_files.iter().map(|s| s.as_str()).collect();
-        let mut merged: Vec<(String, Vec<Diagnostic>)> = all_diags
-            .into_iter()
-            .filter(|(p, _)| !relinted_set.contains(p.as_str()))
-            .collect();
-        merged.extend(relinted);
-        merged
     } else {
-        all_diags
-    };
+        let has_errors = run_lint_pass(
+            &files,
+            &linter,
+            &reporter,
+            &effective_select,
+            &effective_ignore,
+            cli.errors_only,
+            cli.fix,
+            cli.statistics,
+            cache_lock.as_ref(),
+            config_hash,
+        );
 
-    let mut flat_diags: Vec<Diagnostic> = display_diags
-        .iter()
-        .flat_map(|(_, d)| d.iter())
-        .filter(|d| !cli.errors_only || d.severity == Severity::Error)
-        .cloned()
-        .collect();
-    flat_diags.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+        // Save cache
+        if let Some(c) = &cache_lock {
+            c.read().unwrap().save();
+        }
 
-    reporter.print(&flat_diags);
+        if !cli.no_fail && has_errors {
+            std::process::exit(1);
+        }
+    }
+}
 
-    let elapsed = start.elapsed().as_millis();
-    reporter.print_summary(&flat_diags, files.len(), elapsed);
+/// Derive effective select/ignore from a config, applying CLI overrides.
+fn compute_effective_select(
+    config: &Config,
+    cli_select: &Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    let mut effective = cli_select.clone().or_else(|| {
+        if config.select.is_empty() {
+            None
+        } else {
+            Some(config.select.clone())
+        }
+    });
+    if !config.extend_select.is_empty() {
+        if let Some(ref mut sel) = effective {
+            sel.extend(config.extend_select.iter().cloned());
+            sel.sort_unstable();
+            sel.dedup();
+        }
+    }
+    effective
+}
 
-    if cli.fix && total_fixed > 0 {
-        eprintln!("Fixed {} violation(s).", total_fixed);
+fn compute_effective_ignore(config: &Config) -> Option<Vec<String>> {
+    if config.ignore.is_empty() {
+        None
+    } else {
+        Some(config.ignore.clone())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_watch_mode(
+    watch_paths: &[String],
+    initial_files: &[String],
+    initial_exclude_patterns: &[glob::Pattern],
+    initial_config: &rblint::config::Config,
+    reporter: &Reporter,
+    cli_select: &Option<Vec<String>>,
+    cli_ignore: &[String],
+    initial_effective_select: &Option<Vec<String>>,
+    initial_effective_ignore: &Option<Vec<String>>,
+    errors_only: bool,
+    fix: bool,
+    statistics: bool,
+    cache: Option<&RwLock<Cache>>,
+    config_hash: u64,
+) {
+    use notify::event::{EventKind, ModifyKind};
+    use notify::{Config as NConfig, EventHandler, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc;
+
+    let running = Arc::new(AtomicBool::new(true));
+    let r = Arc::clone(&running);
+
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl+C handler");
+
+    // Mutable state that may be updated when .rlint.toml changes
+    let mut current_linter = Linter::with_config(initial_config);
+    let mut current_config_hash = config_hash;
+    let mut current_effective_select = initial_effective_select.clone();
+    let mut current_effective_ignore = initial_effective_ignore.clone();
+    let mut current_exclude_patterns = initial_exclude_patterns.to_vec();
+    let mut cache_dirty = false;
+
+    // Initial lint
+    run_lint_pass(
+        initial_files,
+        &current_linter,
+        reporter,
+        &current_effective_select,
+        &current_effective_ignore,
+        errors_only,
+        fix,
+        statistics,
+        cache,
+        current_config_hash,
+    );
+    if let Some(c) = cache {
+        c.read().unwrap().save();
+    }
+    eprintln!("\n[watching for changes... press Ctrl+C to stop]");
+
+    let (tx, rx) = mpsc::channel::<notify::Result<notify::Event>>();
+
+    struct ChannelHandler(mpsc::Sender<notify::Result<notify::Event>>);
+    impl EventHandler for ChannelHandler {
+        fn handle_event(&mut self, event: notify::Result<notify::Event>) {
+            let _ = self.0.send(event);
+        }
     }
 
-    if cli.statistics {
-        print_statistics(&flat_diags);
+    let mut watcher = RecommendedWatcher::new(ChannelHandler(tx), NConfig::default())
+        .expect("Failed to create file watcher");
+
+    for path in watch_paths {
+        let p = std::path::Path::new(path);
+        if p.is_dir() {
+            watcher
+                .watch(p, RecursiveMode::Recursive)
+                .unwrap_or_else(|e| eprintln!("Warning: cannot watch {}: {}", path, e));
+        } else {
+            watcher
+                .watch(p, RecursiveMode::NonRecursive)
+                .unwrap_or_else(|e| eprintln!("Warning: cannot watch {}: {}", path, e));
+        }
     }
 
-    if !cli.no_fail && flat_diags.iter().any(|d| d.severity == Severity::Error) {
-        std::process::exit(1);
+    while running.load(Ordering::SeqCst) {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok(Ok(event)) => {
+                let is_relevant = matches!(
+                    event.kind,
+                    EventKind::Create(_)
+                        | EventKind::Modify(ModifyKind::Data(_))
+                        | EventKind::Modify(ModifyKind::Name(_))
+                        | EventKind::Remove(_)
+                );
+                if !is_relevant {
+                    continue;
+                }
+
+                // Check if .rlint.toml changed — if so, reload config and rebuild linter
+                let config_changed = event.paths.iter().any(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n == ".rlint.toml")
+                        .unwrap_or(false)
+                });
+
+                // Check whether any Ruby file was affected
+                let ruby_changed = event.paths.iter().any(|p| {
+                    let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if ext == "rb"
+                        || name == "Gemfile"
+                        || name == "Rakefile"
+                        || name.ends_with(".gemspec")
+                        || name == "Guardfile"
+                    {
+                        let raw = p.to_string_lossy();
+                        let s = normalize_path(&raw);
+                        return !is_excluded(s, &current_exclude_patterns);
+                    }
+                    false
+                });
+
+                if !config_changed && !ruby_changed {
+                    continue;
+                }
+
+                // Clear terminal
+                print!("\x1B[2J\x1B[1;1H");
+
+                // Drain remaining queued events to avoid redundant re-lints
+                while rx.try_recv().is_ok() {}
+
+                // Reload config and rebuild linter when .rlint.toml changes,
+                // recomputing effective_select, effective_ignore, and exclude patterns.
+                if config_changed {
+                    eprintln!("[.rlint.toml changed, reloading config]");
+                    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    let mut new_config = rblint::config::Config::load(&cwd);
+                    new_config.exclude.push(".rblint_cache".to_string());
+                    // Re-apply CLI --ignore rules on top of the reloaded config
+                    new_config.ignore.extend(cli_ignore.iter().cloned());
+                    current_config_hash = hash_config(&new_config);
+                    current_linter = Linter::with_config(&new_config);
+                    current_effective_select = compute_effective_select(&new_config, cli_select);
+                    current_effective_ignore = compute_effective_ignore(&new_config);
+                    current_exclude_patterns = compile_exclude_patterns(&new_config.exclude);
+                }
+
+                // Re-collect full file list in case files were added/removed
+                let files = collect_ruby_files(watch_paths, &current_exclude_patterns);
+
+                if files.is_empty() {
+                    eprintln!("No Ruby files found.");
+                } else {
+                    // Always re-lint all files so the full project state is shown
+                    // (avoids other files' errors disappearing from output).
+                    run_lint_pass(
+                        &files,
+                        &current_linter,
+                        reporter,
+                        &current_effective_select,
+                        &current_effective_ignore,
+                        errors_only,
+                        fix,
+                        statistics,
+                        cache,
+                        current_config_hash,
+                    );
+                    cache_dirty = true;
+                }
+
+                eprintln!("\n[watching for changes... press Ctrl+C to stop]");
+            }
+            Ok(Err(e)) => eprintln!("Watch error: {}", e),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
     }
+
+    // Save cache on exit only if modified
+    if cache_dirty {
+        if let Some(c) = cache {
+            c.read().unwrap().save();
+        }
+    }
+
+    eprintln!("\nStopped.");
 }
 
 fn print_statistics(diags: &[Diagnostic]) {
