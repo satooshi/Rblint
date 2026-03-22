@@ -5,6 +5,10 @@ mod r023_blank_lines;
 mod r024_p_nil;
 mod r025_final_newline;
 mod r026_method_spacing;
+mod r027_empty_method;
+mod r028_negated_if;
+mod r029_double_negation;
+mod r033_redundant_self;
 
 pub use r020_semicolon::SemicolonRule;
 pub use r021_operator_spacing::OperatorSpacingRule;
@@ -13,3 +17,7 @@ pub use r023_blank_lines::BlankLinesRule;
 pub use r024_p_nil::PNilRule;
 pub use r025_final_newline::FinalNewlineRule;
 pub use r026_method_spacing::MethodSpacingRule;
+pub use r027_empty_method::EmptyMethodRule;
+pub use r028_negated_if::NegatedIfRule;
+pub use r029_double_negation::DoubleNegationRule;
+pub use r033_redundant_self::RedundantSelfRule;

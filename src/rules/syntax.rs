@@ -153,6 +153,144 @@ impl Rule for SyntaxRule {
             ));
         }
 
+        // R034: Empty rescue body (swallowed exception)
+        {
+            let mut i = 0;
+            while i < tokens.len() {
+                if tokens[i].kind == TokenKind::Rescue {
+                    // Distinguish clause rescue from modifier rescue.
+                    // A clause rescue follows a newline (or is at file start);
+                    // a modifier rescue (`expr rescue fallback`) follows an expression.
+                    let prev_non_ws = (0..i)
+                        .rev()
+                        .find(|&k| tokens[k].kind != TokenKind::Whitespace)
+                        .map(|k| &tokens[k]);
+                    let is_clause = match prev_non_ws {
+                        None => true,
+                        Some(p) => matches!(p.kind, TokenKind::Newline),
+                    };
+                    if !is_clause {
+                        i += 1;
+                        continue;
+                    }
+                    let rescue_line = tokens[i].line;
+                    // Skip past the rescue line (exception class list, etc.)
+                    let mut j = i + 1;
+                    while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
+                        j += 1;
+                    }
+                    // Skip newline
+                    if j < tokens.len() {
+                        j += 1;
+                    }
+                    // Skip whitespace/newlines — if the next non-ws token is
+                    // `end`, `rescue`, or `ensure`, the body is empty
+                    while j < tokens.len()
+                        && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+                    {
+                        j += 1;
+                    }
+                    if j < tokens.len()
+                        && matches!(
+                            tokens[j].kind,
+                            TokenKind::End | TokenKind::Rescue | TokenKind::Ensure
+                        )
+                    {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            rescue_line,
+                            tokens[i].col,
+                            "R034",
+                            "Empty `rescue` body suppresses exceptions silently — add error handling or logging",
+                            Severity::Warning,
+                        ));
+                    }
+                }
+                i += 1;
+            }
+        }
+
+        // R035: Unreachable code after `return`/`raise`/`break`/`next`
+        {
+            let mut i = 0;
+            while i < tokens.len() {
+                let is_terminator = matches!(tokens[i].kind, TokenKind::Return | TokenKind::Raise);
+                if !is_terminator {
+                    i += 1;
+                    continue;
+                }
+
+                let term_line = tokens[i].line;
+
+                // Check if there's a postfix modifier on the same line.
+                // Only `if`/`unless`/`while`/`until` make return/raise conditional.
+                // Logical operators (`||`, `&&`, `or`, `and`) are part of the
+                // returned/raised expression and do NOT make the terminator optional.
+                let mut has_inline_condition = false;
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
+                    if matches!(
+                        tokens[j].kind,
+                        TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until
+                    ) {
+                        has_inline_condition = true;
+                        break;
+                    }
+                    j += 1;
+                }
+                if has_inline_condition {
+                    i += 1;
+                    continue;
+                }
+
+                // Skip to end of current line
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
+                    j += 1;
+                }
+                // Skip the newline
+                if j < tokens.len() {
+                    j += 1;
+                }
+
+                // Check the next non-blank line
+                // Skip blank lines
+                while j < tokens.len()
+                    && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+                {
+                    j += 1;
+                }
+
+                // If the next meaningful token is not `end`/`rescue`/`ensure`/`else`/`elsif`/`when`,
+                // it's potentially unreachable code
+                if j < tokens.len() {
+                    let next_kind = &tokens[j].kind;
+                    let next_line = tokens[j].line;
+                    if !matches!(
+                        next_kind,
+                        TokenKind::End
+                            | TokenKind::Rescue
+                            | TokenKind::Ensure
+                            | TokenKind::Else
+                            | TokenKind::Elsif
+                            | TokenKind::When
+                    ) && next_line > term_line
+                    {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            next_line,
+                            tokens[j].col,
+                            "R035",
+                            "Unreachable code after `return`/`raise`",
+                            Severity::Warning,
+                        ));
+                    }
+                }
+
+                i += 1;
+            }
+        }
+
         // R032: Redundant `return` on last line of method
         // Heuristic: `return expr` immediately before `end`
         let mut i = 0;
@@ -317,5 +455,66 @@ mod tests {
     fn no_violation_implicit_return() {
         let src = "def foo\n  42\nend";
         assert!(!has_rule(&check(src), "R032"));
+    }
+
+    // --- R035: unreachable code ---
+
+    #[test]
+    fn no_violation_return_if_modifier() {
+        // `return if condition` is a modifier form — code after it is NOT unreachable
+        let src = "def foo\n  return if done?\n  do_work\nend";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_raise_unless_modifier() {
+        let src = "def foo\n  raise unless valid?\n  do_work\nend";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_unconditional_return() {
+        let src = "def foo\n  return 42\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_unconditional_raise() {
+        let src = "def foo\n  raise \"err\"\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_return_with_logical_or() {
+        // `return foo || default` is still unconditional — `||` only affects the value
+        let src = "def foo\n  return value || fallback\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_return_with_logical_and() {
+        let src = "def foo\n  return a && b\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_modifier_rescue() {
+        // `expr rescue fallback` is a modifier form — NOT an empty rescue clause
+        let src = "def foo\n  result = danger rescue nil\nend\n";
+        let diags = check(src);
+        assert!(!has_rule(&diags, "R034"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_empty_rescue_clause() {
+        let src = "begin\n  danger\nrescue\nend\n";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R034"), "{diags:?}");
     }
 }

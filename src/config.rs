@@ -23,6 +23,10 @@ pub struct Config {
     #[serde(rename = "max-complexity")]
     pub max_complexity: usize,
 
+    /// Maximum number of method parameters (default: 5)
+    #[serde(rename = "max-parameters")]
+    pub max_parameters: usize,
+
     /// Select only these rules (empty = all rules)
     pub select: Vec<String>,
 
@@ -44,6 +48,7 @@ impl Default for Config {
             max_method_lines: 30,
             max_class_lines: 300,
             max_complexity: 10,
+            max_parameters: 5,
             select: vec![],
             ignore: vec![],
             extend_select: vec![],

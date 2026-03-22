@@ -20,6 +20,12 @@ fn is_screaming_snake_case(s: &str) -> bool {
         .all(|c| c.is_uppercase() || c.is_ascii_digit() || c == '_')
 }
 
+/// Returns true if the name is proper CamelCase:
+/// starts with uppercase and contains no underscores.
+fn is_camel_case(s: &str) -> bool {
+    s.chars().next().is_some_and(|c| c.is_uppercase()) && !s.contains('_')
+}
+
 impl Rule for NamingRule {
     fn name(&self) -> &'static str {
         "R010"
@@ -32,6 +38,68 @@ impl Rule for NamingRule {
 
         while i < tokens.len() {
             let tok = &tokens[i];
+
+            // R013: Class/module name should be CamelCase
+            if tok.kind == TokenKind::Class || tok.kind == TokenKind::Module {
+                let kind_label = if tok.kind == TokenKind::Class {
+                    "Class"
+                } else {
+                    "Module"
+                };
+                let mut j = i + 1;
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+                // Allow root-qualified declarations like `class ::Foo::Bar`
+                if tokens
+                    .get(j)
+                    .is_some_and(|t| t.kind == TokenKind::ColonColon)
+                {
+                    j += 1;
+                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                        j += 1;
+                    }
+                }
+                // Walk through all name segments separated by ::
+                loop {
+                    let Some(name_tok) = tokens.get(j) else {
+                        break;
+                    };
+                    if !matches!(name_tok.kind, TokenKind::Ident | TokenKind::Constant) {
+                        break;
+                    }
+                    if !is_camel_case(&name_tok.text) {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            name_tok.line,
+                            name_tok.col,
+                            "R013",
+                            format!(
+                                "{} name `{}` should be CamelCase",
+                                kind_label, name_tok.text
+                            ),
+                            Severity::Warning,
+                        ));
+                    }
+                    j += 1;
+                    // Skip whitespace
+                    while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                        j += 1;
+                    }
+                    // Continue through :: separators
+                    if tokens
+                        .get(j)
+                        .is_some_and(|t| t.kind == TokenKind::ColonColon)
+                    {
+                        j += 1;
+                        while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                            j += 1;
+                        }
+                        continue;
+                    }
+                    break;
+                }
+            }
 
             // Method names should be snake_case: `def foo_bar`
             if tok.kind == TokenKind::Def {
@@ -208,5 +276,45 @@ mod tests {
             .find(|d| d.rule == "R012")
             .expect("R012 expected");
         assert!(r012.message.contains("fooBar"));
+    }
+
+    // --- R013: class/module CamelCase (qualified names) ---
+
+    #[test]
+    fn no_violation_qualified_camel_case() {
+        let diags = check("module Foo::Bar\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_qualified_second_segment_not_camel_case() {
+        let diags = check("module Foo::bar_baz\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_qualified_first_segment_not_camel_case() {
+        let diags = check("class foo_bar::Baz\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_deeply_qualified_camel_case() {
+        let diags = check("module Foo::Bar::Baz\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_root_qualified_camel_case() {
+        // `class ::Foo` is root-qualified and valid CamelCase
+        let diags = check("class ::Foo\nend");
+        assert!(!rules_in(&diags).contains(&"R013"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_root_qualified_not_camel_case() {
+        // `module ::foo_bar` — leading `::` but non-CamelCase
+        let diags = check("module ::foo_bar\nend");
+        assert!(rules_in(&diags).contains(&"R013"), "{diags:?}");
     }
 }
