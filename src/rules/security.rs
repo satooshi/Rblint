@@ -154,7 +154,7 @@ impl Rule for DynamicSendRule {
         let mut diags = Vec::new();
         let tokens = ctx.tokens;
 
-        for i in 1..tokens.len() {
+        for i in 0..tokens.len() {
             if tokens[i].kind != TokenKind::Ident {
                 continue;
             }
@@ -162,37 +162,48 @@ impl Rule for DynamicSendRule {
             if name != "send" && name != "public_send" {
                 continue;
             }
-            // Must be preceded by `.` (method call)
-            let prev_kind = (0..i)
-                .rev()
-                .find(|&j| tokens[j].kind != TokenKind::Whitespace)
-                .map(|j| tokens[j].kind.clone());
-            if prev_kind != Some(TokenKind::Dot) {
-                continue;
-            }
-            // Look at the first argument
+
+            // Look at the first argument (with or without a receiver dot)
             let mut j = i + 1;
             while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
                 j += 1;
             }
-            if j >= tokens.len() || tokens[j].kind != TokenKind::LParen {
+
+            if j >= tokens.len() {
                 continue;
             }
-            j += 1;
-            while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+
+            if tokens[j].kind == TokenKind::LParen {
+                // paren form: send(expr) or obj.send(expr)
                 j += 1;
-            }
-            // If the first argument is NOT a symbol (`:name`), it's dynamic
-            let is_static = j < tokens.len() && tokens[j].kind == TokenKind::Symbol;
-            if !is_static && j < tokens.len() && tokens[j].kind != TokenKind::RParen {
-                diags.push(Diagnostic::new(
-                    ctx.file,
-                    tokens[i].line,
-                    tokens[i].col,
-                    "R052",
-                    format!("`{name}` with a dynamic method name is a security risk — prefer explicit method calls"),
-                    Severity::Warning,
-                ));
+                while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+                    j += 1;
+                }
+                // If the first argument is NOT a symbol (`:name`), it's dynamic
+                let is_static = j < tokens.len() && tokens[j].kind == TokenKind::Symbol;
+                if !is_static && j < tokens.len() && tokens[j].kind != TokenKind::RParen {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        tokens[i].line,
+                        tokens[i].col,
+                        "R052",
+                        format!("`{name}` with a dynamic method name is a security risk — prefer explicit method calls"),
+                        Severity::Warning,
+                    ));
+                }
+            } else if tokens[j].kind != TokenKind::Newline && tokens[j].kind != TokenKind::Dot {
+                // no-paren form: send expr or obj.send expr
+                let is_static = tokens[j].kind == TokenKind::Symbol;
+                if !is_static {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        tokens[i].line,
+                        tokens[i].col,
+                        "R052",
+                        format!("`{name}` with a dynamic method name is a security risk — prefer explicit method calls"),
+                        Severity::Warning,
+                    ));
+                }
             }
         }
 
@@ -298,9 +309,11 @@ impl Rule for UnsafeDeserializationRule {
                 continue;
             }
 
-            // Next non-whitespace should be `.`
+            // Next non-whitespace/newline should be `.`
             let mut j = i + 1;
-            while j < tokens.len() && tokens[j].kind == TokenKind::Whitespace {
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
                 j += 1;
             }
             if j >= tokens.len() || tokens[j].kind != TokenKind::Dot {
@@ -308,9 +321,11 @@ impl Rule for UnsafeDeserializationRule {
                 continue;
             }
 
-            // Next non-whitespace should be `load` (but NOT `safe_load`)
+            // Next non-whitespace/newline should be `load` (but NOT `safe_load`)
             let mut k = j + 1;
-            while k < tokens.len() && tokens[k].kind == TokenKind::Whitespace {
+            while k < tokens.len()
+                && matches!(tokens[k].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
                 k += 1;
             }
             if k >= tokens.len() || tokens[k].kind != TokenKind::Ident {
@@ -442,6 +457,54 @@ mod tests {
         assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
     }
 
+    #[test]
+    fn violation_send_without_parens() {
+        let src = "obj.send method_name\n";
+        assert!(
+            has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_send_without_parens_symbol() {
+        let src = "obj.send :foo\n";
+        assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
+    }
+
+    #[test]
+    fn violation_receiverless_send() {
+        let src = "send(method_name)\n";
+        assert!(
+            has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_receiverless_send_symbol() {
+        let src = "send(:foo)\n";
+        assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
+    }
+
+    #[test]
+    fn violation_receiverless_send_no_parens() {
+        let src = "send method_name\n";
+        assert!(
+            has_rule(&check_rule(&DynamicSendRule, src), "R052"),
+            "{:?}",
+            check_rule(&DynamicSendRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_receiverless_send_no_parens_symbol() {
+        let src = "send :foo\n";
+        assert!(!has_rule(&check_rule(&DynamicSendRule, src), "R052"));
+    }
+
     // --- R053: shell injection ---
 
     #[test]
@@ -494,5 +557,25 @@ mod tests {
             &check_rule(&UnsafeDeserializationRule, src),
             "R054"
         ));
+    }
+
+    #[test]
+    fn violation_yaml_load_multiline() {
+        let src = "data = YAML.\n  load(input)\n";
+        assert!(
+            has_rule(&check_rule(&UnsafeDeserializationRule, src), "R054"),
+            "{:?}",
+            check_rule(&UnsafeDeserializationRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_marshal_load_multiline() {
+        let src = "obj = Marshal.\n  load(data)\n";
+        assert!(
+            has_rule(&check_rule(&UnsafeDeserializationRule, src), "R054"),
+            "{:?}",
+            check_rule(&UnsafeDeserializationRule, src)
+        );
     }
 }
