@@ -77,6 +77,7 @@ fn main() {
         Format::Text => OutputFormat::Text,
         Format::Json => OutputFormat::Json,
         Format::Github => OutputFormat::Github,
+        Format::Sarif => OutputFormat::Sarif,
     };
 
     let reporter = Reporter {

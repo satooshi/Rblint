@@ -5,6 +5,7 @@ pub enum Format {
     Text,
     Json,
     Github,
+    Sarif,
 }
 
 #[derive(Parser)]
