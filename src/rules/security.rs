@@ -89,6 +89,7 @@ impl Rule for HardcodedCredentialsRule {
             if tokens[i].kind != TokenKind::Ident
                 && tokens[i].kind != TokenKind::InstanceVar
                 && tokens[i].kind != TokenKind::Constant
+                && tokens[i].kind != TokenKind::ClassVar
             {
                 i += 1;
                 continue;
@@ -428,6 +429,17 @@ mod tests {
             &check_rule(&HardcodedCredentialsRule, src),
             "R051"
         ));
+    }
+
+    #[test]
+    fn violation_hardcoded_class_variable_password() {
+        // Class variables (@@password) should also be detected
+        let src = "@@password = \"secret123\"\n";
+        assert!(
+            has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
     }
 
     #[test]
