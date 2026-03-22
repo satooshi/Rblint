@@ -197,11 +197,10 @@ pub fn compute_effective_select(
         }
     });
     if !config.extend_select.is_empty() {
-        if let Some(ref mut sel) = effective {
-            sel.extend(config.extend_select.iter().cloned());
-            sel.sort_unstable();
-            sel.dedup();
-        }
+        let sel = effective.get_or_insert_with(Vec::new);
+        sel.extend(config.extend_select.iter().cloned());
+        sel.sort_unstable();
+        sel.dedup();
     }
     effective
 }
@@ -211,5 +210,35 @@ pub fn compute_effective_ignore(config: &Config) -> Option<Vec<String>> {
         None
     } else {
         Some(config.ignore.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rblint::config::Config;
+
+    #[test]
+    fn extend_select_alone_returns_those_rules() {
+        let mut config = Config::default();
+        config.extend_select = vec!["R001".to_string(), "R002".to_string()];
+        let result = compute_effective_select(&config, &None);
+        assert_eq!(result, Some(vec!["R001".to_string(), "R002".to_string()]));
+    }
+
+    #[test]
+    fn extend_select_appends_to_base_select() {
+        let mut config = Config::default();
+        config.select = vec!["R001".to_string()];
+        config.extend_select = vec!["R002".to_string()];
+        let result = compute_effective_select(&config, &None);
+        assert_eq!(result, Some(vec!["R001".to_string(), "R002".to_string()]));
+    }
+
+    #[test]
+    fn extend_select_empty_with_no_select_returns_none() {
+        let config = Config::default();
+        let result = compute_effective_select(&config, &None);
+        assert_eq!(result, None);
     }
 }
