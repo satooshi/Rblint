@@ -157,7 +157,7 @@ pub fn run_lint_pass(
     reporter.print(&flat_diags);
 
     let elapsed = start.elapsed().as_millis();
-    reporter.print_summary(&flat_diags, files.len(), elapsed);
+    reporter.print_summary(&flat_diags, display_diags.len(), elapsed);
 
     if cli_fix && total_fixed > 0 {
         eprintln!("Fixed {} violation(s).", total_fixed);
@@ -178,9 +178,9 @@ pub fn print_statistics(diags: &[Diagnostic]) {
     }
     let mut sorted: Vec<_> = counts.iter().collect();
     sorted.sort_by(|a, b| b.1.cmp(a.1));
-    println!("\nStatistics:");
+    eprintln!("\nStatistics:");
     for (rule, count) in sorted {
-        println!("  {:>5}  {}", count, rule);
+        eprintln!("  {:>5}  {}", count, rule);
     }
 }
 
