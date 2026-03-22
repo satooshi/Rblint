@@ -1,4 +1,5 @@
 mod cli;
+mod diff_filter;
 mod file_collector;
 mod runner;
 mod watcher;
@@ -19,6 +20,32 @@ use watcher::run_watch_mode;
 
 fn main() {
     let cli = Cli::parse();
+
+    // Handle --init: generate a default .rblint.toml in the current directory
+    if cli.init {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let config_path = cwd.join(".rblint.toml");
+        if config_path.exists() {
+            eprintln!(
+                "Error: .rblint.toml already exists at {}",
+                config_path.display()
+            );
+            std::process::exit(1);
+        }
+        let content = generate_default_config();
+        if let Err(e) = std::fs::write(&config_path, &content) {
+            eprintln!("Error: Failed to write .rblint.toml: {e}");
+            std::process::exit(1);
+        }
+        println!("Created {}", config_path.display());
+        // Suggest migration if .rubocop.yml exists
+        if cwd.join(".rubocop.yml").exists() {
+            eprintln!(
+                "Tip: A .rubocop.yml was found. Run `rblint --migrate-config` to convert it."
+            );
+        }
+        return;
+    }
 
     // Handle --migrate-config: find .rubocop.yml using provided path or CWD.
     // `cli.paths[0]` is the user-supplied path (defaults to ".").
@@ -102,6 +129,16 @@ fn main() {
     } else {
         Some(RwLock::new(Cache::load(&cache_path)))
     };
+    // --diff mode: read unified diff from stdin, filter diagnostics to changed lines only
+    let diff_changed = if cli.diff {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).unwrap_or(0);
+        Some(diff_filter::parse_diff(&buf))
+    } else {
+        None
+    };
+
     if cli.watch {
         run_watch_mode(
             &cli.paths,
@@ -131,6 +168,7 @@ fn main() {
             cli.statistics,
             cache_lock.as_ref(),
             config_hash,
+            diff_changed.as_ref(),
         );
 
         // Save cache
@@ -142,4 +180,39 @@ fn main() {
             std::process::exit(1);
         }
     }
+}
+
+/// Generate the content for a default .rblint.toml with comments.
+fn generate_default_config() -> String {
+    r#"# Rblint configuration
+# See https://github.com/satooshi/Rblint for documentation
+
+# Maximum line length (default: 120)
+line-length = 120
+
+# Maximum method length in lines (default: 30)
+max-method-lines = 30
+
+# Maximum class length in lines (default: 300)
+max-class-lines = 300
+
+# Maximum cyclomatic complexity per method (default: 10)
+max-complexity = 10
+
+# Maximum number of method parameters (default: 5)
+max-parameters = 5
+
+# Rules to enable (empty = all rules enabled)
+# select = ["R001", "R002"]
+
+# Rules to disable
+# ignore = ["R003"]
+
+# Additional rules to enable beyond defaults
+# extend-select = []
+
+# Paths/globs to exclude from linting
+exclude = ["vendor/**", "node_modules/**", ".git/**"]
+"#
+    .to_string()
 }

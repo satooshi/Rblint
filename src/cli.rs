@@ -100,4 +100,12 @@ pub struct Cli {
     /// Read .rubocop.yml and print an equivalent .rblint.toml to stdout
     #[arg(long)]
     pub migrate_config: bool,
+
+    /// Initialize a default .rblint.toml configuration file in the current directory
+    #[arg(long)]
+    pub init: bool,
+
+    /// Read a unified diff from stdin and only report diagnostics on changed lines
+    #[arg(long)]
+    pub diff: bool,
 }

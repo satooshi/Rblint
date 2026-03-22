@@ -89,6 +89,9 @@ pub fn run_lint_pass(
     cli_statistics: bool,
     cache: Option<&RwLock<Cache>>,
     config_hash: u64,
+    diff_filter: Option<
+        &std::collections::HashMap<std::path::PathBuf, std::collections::HashSet<usize>>,
+    >,
 ) -> bool {
     let start = Instant::now();
 
@@ -145,6 +148,17 @@ pub fn run_lint_pass(
         .iter()
         .flat_map(|(_, d)| d.iter())
         .filter(|d| !cli_errors_only || d.severity == Severity::Error)
+        .filter(|d| {
+            if let Some(filter) = diff_filter {
+                let file_path = std::path::PathBuf::from(&d.file);
+                filter
+                    .get(&file_path)
+                    .map(|lines| lines.contains(&d.line))
+                    .unwrap_or(false)
+            } else {
+                true
+            }
+        })
         .cloned()
         .collect();
     flat_diags.sort_by(|a, b| {

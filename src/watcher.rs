@@ -59,6 +59,7 @@ pub fn run_watch_mode(
         statistics,
         cache,
         current_config_hash,
+        None,
     );
     if let Some(c) = cache {
         c.read().unwrap().save();
@@ -174,6 +175,7 @@ pub fn run_watch_mode(
                         statistics,
                         cache,
                         current_config_hash,
+                        None,
                     );
                     cache_dirty = true;
                 }
