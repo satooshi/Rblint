@@ -1,12 +1,16 @@
 use crate::diagnostic::{Diagnostic, FixKind};
 
-/// Partition fixable diagnostics into (replace_fixes, insert_fixes), deduplicating
-/// by line number within each kind (first-wins). Both kinds may apply to the same line.
-fn split_deduplicated_fixes(diags: &[Diagnostic]) -> (Vec<&Diagnostic>, Vec<&Diagnostic>) {
+/// Partition fixable diagnostics into (replace_fixes, insert_fixes, delete_fixes), deduplicating
+/// by line number within each kind (first-wins). Kinds may apply to the same line.
+fn split_deduplicated_fixes(
+    diags: &[Diagnostic],
+) -> (Vec<&Diagnostic>, Vec<&Diagnostic>, Vec<&Diagnostic>) {
     let mut replace_fixes: Vec<&Diagnostic> = Vec::new();
     let mut insert_fixes: Vec<&Diagnostic> = Vec::new();
+    let mut delete_fixes: Vec<&Diagnostic> = Vec::new();
     let mut seen_replace = std::collections::HashSet::new();
     let mut seen_insert = std::collections::HashSet::new();
+    let mut seen_delete = std::collections::HashSet::new();
     for diag in diags {
         if diag.fix.is_none() {
             continue;
@@ -22,9 +26,14 @@ fn split_deduplicated_fixes(diags: &[Diagnostic]) -> (Vec<&Diagnostic>, Vec<&Dia
                     insert_fixes.push(diag);
                 }
             }
+            FixKind::DeleteLine => {
+                if seen_delete.insert(diag.line) {
+                    delete_fixes.push(diag);
+                }
+            }
         }
     }
-    (replace_fixes, insert_fixes)
+    (replace_fixes, insert_fixes, delete_fixes)
 }
 
 /// Apply all fixable diagnostics to `source` and return the patched content
@@ -43,8 +52,8 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> (String, usize) {
     // str::lines() strips both \n and \r\n, so line content is always clean.
     let mut lines: Vec<String> = source.lines().map(|l| l.to_string()).collect();
 
-    let (mut replace_fixes, mut insert_fixes) = split_deduplicated_fixes(diags);
-    let fix_count = replace_fixes.len() + insert_fixes.len();
+    let (mut replace_fixes, mut insert_fixes, mut delete_fixes) = split_deduplicated_fixes(diags);
+    let fix_count = replace_fixes.len() + insert_fixes.len() + delete_fixes.len();
 
     // Apply ReplaceLine in reverse order (stable — no index shifting for same-kind)
     replace_fixes.sort_by(|a, b| b.line.cmp(&a.line));
@@ -55,13 +64,30 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> (String, usize) {
         }
     }
 
-    // Apply InsertBefore in reverse order to preserve line numbers
+    // Apply InsertBefore first (in reverse order), then DeleteLine (in reverse order).
+    // Inserts must happen before deletes so that delete indices remain valid.
     insert_fixes.sort_by(|a, b| b.line.cmp(&a.line));
     for diag in &insert_fixes {
         let idx = diag.line.saturating_sub(1);
         // Insert at idx (before current line); idx == lines.len() appends at end
         let insert_at = idx.min(lines.len());
         lines.insert(insert_at, diag.fix.clone().unwrap_or_default());
+    }
+
+    // Apply DeleteLine in reverse order to preserve line numbers.
+    // Offset each delete index by the number of inserts at or before that line,
+    // since inserts above have shifted lines down.
+    delete_fixes.sort_by(|a, b| b.line.cmp(&a.line));
+    for diag in &delete_fixes {
+        // Count how many inserts occurred at or before this line (they shifted lines down)
+        let inserts_before = insert_fixes
+            .iter()
+            .filter(|ins| ins.line <= diag.line)
+            .count();
+        let idx = diag.line.saturating_sub(1) + inserts_before;
+        if idx < lines.len() {
+            lines.remove(idx);
+        }
     }
 
     let mut result = lines.join(line_ending);
@@ -194,5 +220,26 @@ mod tests {
         let d_replace = make_diag(1, "R002", "x = 1", FixKind::ReplaceLine);
         let (result, _) = apply_fixes(source, &[d_insert, d_replace]);
         assert_eq!(result, "# frozen_string_literal: true\nx = 1\n");
+    }
+
+    #[test]
+    fn delete_line_removes_blank_line() {
+        let source = "a = 1\n\n\n\nb = 2\n";
+        // R023: delete the 4th line (excess blank line)
+        let d = make_diag(4, "R023", "", FixKind::DeleteLine);
+        let (result, count) = apply_fixes(source, &[d]);
+        assert_eq!(result, "a = 1\n\n\nb = 2\n");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn delete_multiple_blank_lines() {
+        // Three excess blank lines → delete 4th and 5th lines (keep max 2)
+        let source = "a\n\n\n\n\nb\n";
+        let d4 = make_diag(4, "R023", "", FixKind::DeleteLine);
+        let d5 = make_diag(5, "R023", "", FixKind::DeleteLine);
+        let (result, count) = apply_fixes(source, &[d4, d5]);
+        assert_eq!(result, "a\n\n\nb\n");
+        assert_eq!(count, 2);
     }
 }

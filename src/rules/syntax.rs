@@ -201,12 +201,7 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext {
-            file: "test.rb",
-            source,
-            lines: &lines,
-            tokens: &tokens,
-        };
+        let ctx = LintContext::new("test.rb", source, &lines, &tokens);
         SyntaxRule.check(&ctx)
     }
 

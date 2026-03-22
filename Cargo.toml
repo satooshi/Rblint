@@ -2,6 +2,7 @@
 name = "rblint"
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.70.0"
 description = "A fast Ruby linter written in Rust"
 license = "MIT"
 
@@ -26,6 +27,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 bincode = "1"
 notify = "7"
 ctrlc = "3"
+serde_yml = "0.0.12"
 
 [dev-dependencies]
 tempfile = "3"

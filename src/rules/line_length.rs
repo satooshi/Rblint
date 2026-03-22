@@ -44,24 +44,14 @@ mod tests {
     fn check(source: &str) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext {
-            file: "test.rb",
-            source,
-            lines: &lines,
-            tokens: &tokens,
-        };
+        let ctx = LintContext::new("test.rb", source, &lines, &tokens);
         LineLengthRule::default().check(&ctx)
     }
 
     fn check_with_max(source: &str, max: usize) -> Vec<Diagnostic> {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
-        let ctx = LintContext {
-            file: "test.rb",
-            source,
-            lines: &lines,
-            tokens: &tokens,
-        };
+        let ctx = LintContext::new("test.rb", source, &lines, &tokens);
         LineLengthRule { max_length: max }.check(&ctx)
     }
 

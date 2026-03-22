@@ -30,12 +30,7 @@ impl Linter {
         let lines: Vec<&str> = source.lines().collect();
         let tokens = Lexer::new(source).tokenize();
 
-        let ctx = LintContext {
-            file: path,
-            source,
-            lines: &lines,
-            tokens: &tokens,
-        };
+        let ctx = LintContext::new(path, source, &lines, &tokens);
 
         let mut diags: Vec<Diagnostic> = self
             .rules

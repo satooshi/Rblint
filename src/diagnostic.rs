@@ -25,6 +25,8 @@ pub enum FixKind {
     ReplaceLine,
     /// Insert the fix string as a new line *before* the diagnostic's line
     InsertBefore,
+    /// Delete the diagnostic's line entirely
+    DeleteLine,
 }
 
 impl FixKind {
@@ -77,6 +79,12 @@ impl Diagnostic {
     pub fn with_insert_before_fix(mut self, fix: impl Into<String>) -> Self {
         self.fix = Some(fix.into());
         self.fix_kind = FixKind::InsertBefore;
+        self
+    }
+
+    pub fn with_delete_line_fix(mut self) -> Self {
+        self.fix = Some("<delete line>".to_string());
+        self.fix_kind = FixKind::DeleteLine;
         self
     }
 }
