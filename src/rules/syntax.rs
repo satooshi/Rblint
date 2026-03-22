@@ -222,21 +222,16 @@ impl Rule for SyntaxRule {
 
                 let term_line = tokens[i].line;
 
-                // Check if there's an inline condition (modifier form) on the same line.
-                // `return if ready?` or `raise unless valid` are NOT unconditional terminators.
+                // Check if there's a postfix modifier on the same line.
+                // Only `if`/`unless`/`while`/`until` make return/raise conditional.
+                // Logical operators (`||`, `&&`, `or`, `and`) are part of the
+                // returned/raised expression and do NOT make the terminator optional.
                 let mut has_inline_condition = false;
                 let mut j = i + 1;
                 while j < tokens.len() && tokens[j].kind != TokenKind::Newline {
                     if matches!(
                         tokens[j].kind,
-                        TokenKind::If
-                            | TokenKind::Unless
-                            | TokenKind::While
-                            | TokenKind::Until
-                            | TokenKind::And
-                            | TokenKind::Or
-                            | TokenKind::And2
-                            | TokenKind::Or2
+                        TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until
                     ) {
                         has_inline_condition = true;
                         break;
@@ -489,6 +484,21 @@ mod tests {
     #[test]
     fn violation_unconditional_raise() {
         let src = "def foo\n  raise \"err\"\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_return_with_logical_or() {
+        // `return foo || default` is still unconditional — `||` only affects the value
+        let src = "def foo\n  return value || fallback\n  do_work\nend";
+        let diags = check(src);
+        assert!(has_rule(&diags, "R035"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_return_with_logical_and() {
+        let src = "def foo\n  return a && b\n  do_work\nend";
         let diags = check(src);
         assert!(has_rule(&diags, "R035"), "{diags:?}");
     }
