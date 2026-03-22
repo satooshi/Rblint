@@ -78,7 +78,7 @@ impl Rule for StyleRule {
             }
         }
 
-        // R021: Space around operators (=, ==, !=, <, >, etc.)
+        // R021: Space around operators (==, !=, <, >, etc.)
         // Fix: insert missing spaces around the operator on the whole line.
         // Exclude ** (exponent) — the lexer emits two Star tokens, so we skip
         // both stars when they appear consecutively.
@@ -246,11 +246,21 @@ impl Rule for StyleRule {
         if !ctx.source.is_empty() && !ctx.source.ends_with('\n') {
             let last_line = ctx.lines.len();
             let last_line_content = ctx.lines.last().copied().unwrap_or("").to_string();
-            // Preserve the file's existing line ending style
-            let line_ending = if ctx.source.contains("\r\n") {
-                "\r\n"
-            } else {
-                "\n"
+            // Preserve the file's existing line ending style.
+            // Detect CRLF by finding the first \n in the source and checking if it's
+            // preceded by \r. This avoids false-positives from literal \r\n in strings
+            // (which would not appear at a raw line boundary).
+            let line_ending = {
+                let bytes = ctx.source.as_bytes();
+                let has_crlf = bytes
+                    .iter()
+                    .position(|&b| b == b'\n')
+                    .is_some_and(|pos| pos > 0 && bytes[pos - 1] == b'\r');
+                if has_crlf {
+                    "\r\n"
+                } else {
+                    "\n"
+                }
             };
             let fixed = format!("{}{}", last_line_content, line_ending);
             diags.push(
@@ -288,9 +298,24 @@ impl Rule for StyleRule {
                     | TokenKind::For
                     | TokenKind::Begin
                     | TokenKind::Case => {
-                        // Only push if the keyword starts a block (first non-ws token on line
-                        // or after certain tokens). As a heuristic, always push — the stack
-                        // depth only needs to pair def/end correctly at the same level.
+                        // Only push if the keyword starts a block. For if/unless/while/until,
+                        // modifier forms (e.g. `x = 1 if cond`) don't have a matching `end`,
+                        // so only push when the keyword is the first non-whitespace token on
+                        // the line.
+                        let is_modifier_capable = matches!(
+                            tok.kind,
+                            TokenKind::If | TokenKind::Unless | TokenKind::While | TokenKind::Until
+                        );
+                        if is_modifier_capable {
+                            let line_idx = tok.line.saturating_sub(1);
+                            let line = ctx.lines.get(line_idx).copied().unwrap_or("");
+                            let first_non_ws = line.trim_start();
+                            // Check if this keyword is at the start of the line
+                            if !first_non_ws.starts_with(tok.text.as_str()) {
+                                // Modifier form — skip pushing
+                                continue;
+                            }
+                        }
                         block_stack.push(tok.kind.clone());
                     }
                     TokenKind::End => {
@@ -313,7 +338,9 @@ impl Rule for StyleRule {
                 let next = ctx.lines[i + 1];
                 let current_trimmed = current.trim();
                 let next_trimmed = next.trim();
-                if current_trimmed == "end"
+                if (current_trimmed == "end"
+                    || current_trimmed.starts_with("end ")
+                    || current_trimmed.starts_with("end#"))
                     && (next_trimmed.starts_with("def ") || next_trimmed == "def")
                 {
                     let end_indent = leading_whitespace(current);
@@ -352,6 +379,13 @@ fn fix_operator_spacing(line: &str) -> String {
     // Operators to fix, ordered longest-first to avoid partial matches.
     let ops: &[&str] = &[
         "<=>", "==", "!=", "<=", ">=", "&&", "||", "<", ">", "+", "-", "*", "/",
+    ];
+
+    // Multi-character operators that should NOT be touched by the fixer.
+    // If we see one of these at position i, skip past it without adding spaces.
+    // This prevents corrupting `=>`, `**`, `<<`, `>>`, `+=`, `-=`, `*=`, `/=`.
+    let skip_ops: &[&str] = &[
+        "**", "=>", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=",
     ];
 
     let mut out = String::with_capacity(line.len() + 8);
@@ -395,6 +429,22 @@ fn fix_operator_spacing(line: &str) -> String {
             quote_char = b;
             out.push(b as char);
             i += 1;
+            continue;
+        }
+
+        // First, check if we're at a multi-char operator that should be skipped entirely
+        // (e.g. =>, **, <<, >>). If so, copy it verbatim and advance past it.
+        let mut skipped = false;
+        for skip in skip_ops {
+            let sb = skip.as_bytes();
+            if i + sb.len() <= bytes.len() && &bytes[i..i + sb.len()] == sb {
+                out.push_str(skip);
+                i += sb.len();
+                skipped = true;
+                break;
+            }
+        }
+        if skipped {
             continue;
         }
 
@@ -570,7 +620,7 @@ mod tests {
         let diags = check("a = 1\n\n\n\nb = 2");
         let diag = diags.iter().find(|d| d.rule == "R023").expect("R023 diag");
         assert_eq!(diag.fix_kind, FixKind::DeleteLine);
-        // The fix field is set (empty string used as marker for DeleteLine)
+        // The fix field is set (`"<delete line>"` marker for DeleteLine)
         assert!(diag.fix.is_some());
     }
 
