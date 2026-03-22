@@ -113,9 +113,9 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     }
 
     // Use the process ID to make temp/backup names unique, avoiding conflicts
-    // with existing files or concurrent rlint processes.
+    // with existing files or concurrent rblint processes.
     let pid = std::process::id();
-    let tmp_path = format!("{}.rlint_{}.tmp", path, pid);
+    let tmp_path = format!("{}.rblint_{}.tmp", path, pid);
     std::fs::write(&tmp_path, &fixed)?;
     // Preserve original file permissions on the temp file before renaming.
     if let Ok(meta) = std::fs::metadata(path) {
@@ -124,11 +124,11 @@ pub fn fix_file(path: &str, diags: &[Diagnostic]) -> std::io::Result<usize> {
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         // On Unix, rename() over an existing file is atomic and should succeed.
         // On Windows it fails with AlreadyExists. We fall back to a backup-and-replace
-        // strategy: rename original to a .rlint_bak, then rename tmp into place.
+        // strategy: rename original to a .rblint_bak, then rename tmp into place.
         // This is not atomic on Windows (there is a brief gap between the two renames),
         // but restores the original if the second rename fails.
         if e.kind() == std::io::ErrorKind::AlreadyExists {
-            let bak_path = format!("{}.rlint_{}.bak", path, pid);
+            let bak_path = format!("{}.rblint_{}.bak", path, pid);
             if let Err(bak_err) = std::fs::rename(path, &bak_path) {
                 let _ = std::fs::remove_file(&tmp_path);
                 return Err(bak_err);

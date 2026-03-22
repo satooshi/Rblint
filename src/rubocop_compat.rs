@@ -1,7 +1,7 @@
 //! RuboCop compatibility layer.
 //!
 //! Parses `.rubocop.yml` and converts it into an Rblint [`Config`].
-//! Also provides `generate_rlint_toml` to emit an equivalent `.rlint.toml`.
+//! Also provides `generate_rblint_toml` to emit an equivalent `.rblint.toml`.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -277,10 +277,10 @@ pub fn convert_to_config(rubocop: &RuboCopConfig) -> Config {
     config
 }
 
-/// Serialise an Rblint [`Config`] as a `.rlint.toml`-formatted string.
+/// Serialise an Rblint [`Config`] as a `.rblint.toml`-formatted string.
 ///
 /// Only non-default values are emitted so the output is as minimal as possible.
-pub fn generate_rlint_toml(config: &Config) -> String {
+pub fn generate_rblint_toml(config: &Config) -> String {
     let defaults = Config::default();
     let mut lines: Vec<String> = Vec::new();
 
@@ -480,14 +480,14 @@ Metrics/MethodLength:
         assert!(cfg.ignore.contains(&"R040".to_string()));
     }
 
-    // --- generate_rlint_toml ---
+    // --- generate_rblint_toml ---
 
     #[test]
     fn generate_toml_emits_non_default_values() {
         let mut cfg = Config::default();
         cfg.line_length = 80;
         cfg.ignore = vec!["R003".to_string()];
-        let toml = generate_rlint_toml(&cfg);
+        let toml = generate_rblint_toml(&cfg);
         assert!(toml.contains("line-length = 80"), "got: {toml}");
         assert!(toml.contains("ignore = [\"R003\"]"), "got: {toml}");
         assert!(!toml.contains("max-method-lines"), "got: {toml}");
@@ -496,7 +496,7 @@ Metrics/MethodLength:
     #[test]
     fn generate_toml_all_defaults_emits_comment() {
         let cfg = Config::default();
-        let toml = generate_rlint_toml(&cfg);
+        let toml = generate_rblint_toml(&cfg);
         assert!(toml.contains("defaults"), "got: {toml}");
     }
 
@@ -672,13 +672,13 @@ Style/FrozenStringLiteralComment:
         assert_eq!(cfg.line_length, 90);
     }
 
-    // --- generate_rlint_toml: extend-select ---
+    // --- generate_rblint_toml: extend-select ---
 
     #[test]
     fn generate_toml_emits_extend_select() {
         let mut cfg = Config::default();
         cfg.extend_select = vec!["R003".to_string(), "R010".to_string()];
-        let toml = generate_rlint_toml(&cfg);
+        let toml = generate_rblint_toml(&cfg);
         assert!(
             toml.contains("extend-select"),
             "expected extend-select in output, got: {toml}"
@@ -694,7 +694,7 @@ Style/FrozenStringLiteralComment:
         let mut cfg = Config::default();
         cfg.ignore = vec!["has\"quote".to_string(), "has\\slash".to_string()];
         cfg.exclude = vec!["has\nnewline".to_string(), "has\ttab".to_string()];
-        let toml = generate_rlint_toml(&cfg);
+        let toml = generate_rblint_toml(&cfg);
         assert!(
             toml.contains(r#"has\"quote"#),
             "double quote should be escaped"

@@ -22,17 +22,17 @@ impl Suppression {
 }
 
 pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) {
-    // Fast path: skip full parsing when no rlint directives exist in the file.
+    // Fast path: skip full parsing when no rblint directives exist in the file.
     let has_directives = tokens
         .iter()
-        .any(|t| t.kind == TokenKind::Comment && t.text.contains("rlint:"));
+        .any(|t| t.kind == TokenKind::Comment && t.text.contains("rblint:"));
     if !has_directives {
         return;
     }
 
     let mut suppressions: Vec<Suppression> = Vec::new();
     // Active disable blocks: each entry is (rules, start_line).
-    // Multiple concurrent blocks are supported so that a second rlint:disable
+    // Multiple concurrent blocks are supported so that a second rblint:disable
     // does not cancel an earlier one.
     let mut active: Vec<(Option<Vec<String>>, usize)> = Vec::new();
 
@@ -43,7 +43,7 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
         // Strip leading `#` and whitespace
         let text = token.text.trim_start_matches('#').trim();
 
-        if let Some(rest) = text.strip_prefix("rlint:disable-next-line") {
+        if let Some(rest) = text.strip_prefix("rblint:disable-next-line") {
             let rules = parse_rule_list(rest.trim());
             let next_line = token.line + 1;
             suppressions.push(Suppression {
@@ -51,17 +51,17 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
                 start: next_line,
                 end: next_line,
             });
-        } else if let Some(rest) = text.strip_prefix("rlint:enable") {
+        } else if let Some(rest) = text.strip_prefix("rblint:enable") {
             let enable_rules = parse_rule_list(rest.trim());
             let end = token.line.saturating_sub(1);
             match enable_rules {
-                // rlint:enable (no rules) → close ALL active blocks
+                // rblint:enable (no rules) → close ALL active blocks
                 None => {
                     for (rules, start) in active.drain(..) {
                         suppressions.push(Suppression { rules, start, end });
                     }
                 }
-                // rlint:enable Rxx → scan every active block and close/partial-close it
+                // rblint:enable Rxx → scan every active block and close/partial-close it
                 Some(en_rules) => {
                     // If any active block is a global disable (None rules), close ALL blocks.
                     // A targeted enable cannot represent "suppress all except Rxx", so once a
@@ -98,7 +98,7 @@ pub(crate) fn apply_suppressions(diags: &mut Vec<Diagnostic>, tokens: &[Token]) 
                     }
                 }
             }
-        } else if let Some(rest) = text.strip_prefix("rlint:disable") {
+        } else if let Some(rest) = text.strip_prefix("rblint:disable") {
             // Push a new block without closing existing ones so that concurrent
             // disable blocks can coexist independently.
             let rules = parse_rule_list(rest.trim());

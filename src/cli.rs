@@ -20,18 +20,18 @@ Checks your Ruby code for style issues, naming conventions,
 complexity problems, and common mistakes.
 
 Configuration:
-  Create a .rlint.toml in your project root to customize settings:
+  Create a .rblint.toml in your project root to customize settings:
 
     line-length = 100
     max-method-lines = 40
     ignore = [\"R003\"]
 
 Inline suppression:
-  # rlint:disable-next-line R001   (suppress specific rules on next line)
-  # rlint:disable R001,R002        (disable specific rules until re-enabled)
-  # rlint:disable                  (disable all rules until re-enabled)
-  # rlint:enable R001              (re-enable specific rules disabled individually)
-  # rlint:enable                   (re-enable all rules)
+  # rblint:disable-next-line R001   (suppress specific rules on next line)
+  # rblint:disable R001,R002        (disable specific rules until re-enabled)
+  # rblint:disable                  (disable all rules until re-enabled)
+  # rblint:enable R001              (re-enable specific rules disabled individually)
+  # rblint:enable                   (re-enable all rules)
   Note: after a global disable, enable always re-enables all rules.
 
 Rules:
@@ -97,7 +97,7 @@ pub struct Cli {
     #[arg(long)]
     pub no_cache: bool,
 
-    /// Read .rubocop.yml and print an equivalent .rlint.toml to stdout
+    /// Read .rubocop.yml and print an equivalent .rblint.toml to stdout
     #[arg(long)]
     pub migrate_config: bool,
 }

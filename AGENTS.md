@@ -20,7 +20,7 @@ src/
 ├── lib.rs           # Library entry point
 ├── lexer.rs         # Ruby tokenizer
 ├── linter.rs        # Core engine — rule execution, suppression comment handling
-├── config.rs        # .rlint.toml parser (walks up directory tree)
+├── config.rs        # .rblint.toml parser (walks up directory tree)
 ├── diagnostic.rs    # Diagnostic / Severity / FixKind type definitions
 ├── reporter.rs      # Output formatters (Text / JSON / GitHub Actions)
 ├── fixer.rs         # Auto-fix engine (line-level replace & insert)
@@ -42,5 +42,5 @@ src/
 - Rule code scheme: R0xx (naming), R02x (style), R03x (syntax), R04x (complexity)
 - CI runs `cargo fmt --check` + `cargo clippy -- -D warnings` + `cargo test`
 - Test fixtures go in `tests/fixtures/`
-- Config file name is `.rlint.toml`
-- Inline suppression comments: `# rlint:disable` / `# rlint:disable-next-line R001`
+- Config file name is `.rblint.toml`
+- Inline suppression comments: `# rblint:disable` / `# rblint:disable-next-line R001`

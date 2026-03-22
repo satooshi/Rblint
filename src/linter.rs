@@ -39,7 +39,7 @@ impl Linter {
             .flat_map(|rule| rule.check(&ctx))
             .collect();
 
-        // Apply inline suppression directives (# rlint:disable-next-line, # rlint:disable)
+        // Apply inline suppression directives (# rblint:disable-next-line, # rblint:disable)
         apply_suppressions(&mut diags, &tokens);
 
         diags.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
@@ -74,7 +74,7 @@ mod tests {
     fn disable_next_line_suppresses_rule() {
         // R002: trailing whitespace on line 3
         // line 2 has disable-next-line R002
-        let source = "# frozen_string_literal: true\n# rlint:disable-next-line R002\nx = 1   \n";
+        let source = "# frozen_string_literal: true\n# rblint:disable-next-line R002\nx = 1   \n";
         let diags = Linter::new().lint_file("test.rb", source);
         assert!(
             !diags.iter().any(|d| d.rule == "R002"),
@@ -87,7 +87,7 @@ mod tests {
         // R002 disabled, but R001 should still fire
         let long_line = "x".repeat(130);
         let source = format!(
-            "# frozen_string_literal: true\n# rlint:disable-next-line R002\n{}   \n",
+            "# frozen_string_literal: true\n# rblint:disable-next-line R002\n{}   \n",
             long_line
         );
         let diags = Linter::new().lint_file("test.rb", &source);
@@ -105,10 +105,10 @@ mod tests {
     fn disable_block_suppresses_range() {
         let source = concat!(
             "# frozen_string_literal: true\n",
-            "# rlint:disable R002\n",
+            "# rblint:disable R002\n",
             "x = 1   \n",
             "y = 2   \n",
-            "# rlint:enable R002\n",
+            "# rblint:enable R002\n",
             "z = 3   \n",
         );
         let diags = Linter::new().lint_file("test.rb", source);
@@ -126,9 +126,9 @@ mod tests {
         let source = format!(
             concat!(
                 "# frozen_string_literal: true\n",
-                "# rlint:disable R001,R002\n",
+                "# rblint:disable R001,R002\n",
                 "{line}   \n", // line 3: both suppressed
-                "# rlint:enable R002\n",
+                "# rblint:enable R002\n",
                 "{line}   \n", // line 5: R002 fires, R001 still suppressed
             ),
             line = long_line
@@ -143,7 +143,7 @@ mod tests {
 
     #[test]
     fn disable_all_rules_no_rule_list() {
-        let source = "# frozen_string_literal: true\n# rlint:disable\nx = 1   \n";
+        let source = "# frozen_string_literal: true\n# rblint:disable\nx = 1   \n";
         let diags = Linter::new().lint_file("test.rb", source);
         assert!(
             !diags.iter().any(|d| d.rule == "R002"),
@@ -153,17 +153,17 @@ mod tests {
 
     #[test]
     fn nested_disable_blocks_independent() {
-        // Regression for issue #12: a second rlint:disable must not cancel the first.
+        // Regression for issue #12: a second rblint:disable must not cancel the first.
         // disable R001, then disable R002, then enable R002 → R001 still suppressed.
         let long_line = "x".repeat(130);
         let source = format!(
             concat!(
                 "# frozen_string_literal: true\n",
-                "# rlint:disable R001\n",
+                "# rblint:disable R001\n",
                 "{line}\n", // line 3: R001 suppressed
-                "# rlint:disable R002\n",
+                "# rblint:disable R002\n",
                 "{line}   \n", // line 5: R001+R002 suppressed
-                "# rlint:enable R002\n",
+                "# rblint:enable R002\n",
                 "{line}   \n", // line 7: R001 still suppressed, R002 fires
             ),
             line = long_line
@@ -185,11 +185,11 @@ mod tests {
         let source = format!(
             concat!(
                 "# frozen_string_literal: true\n",
-                "# rlint:disable R001\n",
+                "# rblint:disable R001\n",
                 "{line}\n", // line 3: R001 suppressed
-                "# rlint:disable\n",
+                "# rblint:disable\n",
                 "{line}   \n", // line 5: all suppressed
-                "# rlint:enable R002\n",
+                "# rblint:enable R002\n",
                 "{line}   \n", // line 7: global block triggered close-all → R001 fires too
             ),
             line = long_line
@@ -210,11 +210,11 @@ mod tests {
         let source = format!(
             concat!(
                 "# frozen_string_literal: true\n",
-                "# rlint:disable R001\n",
+                "# rblint:disable R001\n",
                 "{line}\n", // line 3: R001 suppressed
-                "# rlint:disable R002\n",
+                "# rblint:disable R002\n",
                 "{line}   \n", // line 5: R001+R002 suppressed
-                "# rlint:enable\n",
+                "# rblint:enable\n",
                 "{line}   \n", // line 7: both fire
             ),
             line = long_line

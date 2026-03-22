@@ -39,7 +39,7 @@ pub fn run_watch_mode(
     })
     .expect("Error setting Ctrl+C handler");
 
-    // Mutable state that may be updated when .rlint.toml changes
+    // Mutable state that may be updated when .rblint.toml changes
     let mut current_linter = Linter::with_config(initial_config);
     let mut current_config_hash = config_hash;
     let mut current_effective_select = initial_effective_select.clone();
@@ -104,11 +104,11 @@ pub fn run_watch_mode(
                     continue;
                 }
 
-                // Check if .rlint.toml changed — if so, reload config and rebuild linter
+                // Check if .rblint.toml changed — if so, reload config and rebuild linter
                 let config_changed = event.paths.iter().any(|p| {
                     p.file_name()
                         .and_then(|n| n.to_str())
-                        .map(|n| n == ".rlint.toml")
+                        .map(|n| n == ".rblint.toml")
                         .unwrap_or(false)
                 });
 
@@ -139,10 +139,10 @@ pub fn run_watch_mode(
                 // Drain remaining queued events to avoid redundant re-lints
                 while rx.try_recv().is_ok() {}
 
-                // Reload config and rebuild linter when .rlint.toml changes,
+                // Reload config and rebuild linter when .rblint.toml changes,
                 // recomputing effective_select, effective_ignore, and exclude patterns.
                 if config_changed {
-                    eprintln!("[.rlint.toml changed, reloading config]");
+                    eprintln!("[.rblint.toml changed, reloading config]");
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
                     let mut new_config = rblint::config::Config::load(&cwd);
                     new_config.exclude.push(".rblint_cache".to_string());

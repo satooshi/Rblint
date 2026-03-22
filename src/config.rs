@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::rubocop_compat;
 
-/// Configuration loaded from `.rlint.toml`
+/// Configuration loaded from `.rblint.toml`
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -71,8 +71,8 @@ pub fn find_file_in_ancestors(start_dir: &Path, filename: &str) -> Option<std::p
 }
 
 impl Config {
-    /// Walk up from `start_dir` looking for `.rlint.toml`.
-    /// If no `.rlint.toml` is found anywhere in the hierarchy, falls back to
+    /// Walk up from `start_dir` looking for `.rblint.toml`.
+    /// If no `.rblint.toml` is found anywhere in the hierarchy, falls back to
     /// the nearest `.rubocop.yml` found during the same traversal.
     /// Returns default config if neither is found.
     pub fn load(start_dir: &Path) -> Self {
@@ -81,12 +81,12 @@ impl Config {
         let canonical =
             std::fs::canonicalize(start_dir).unwrap_or_else(|_| start_dir.to_path_buf());
 
-        // First pass: walk the full hierarchy looking for `.rlint.toml`.
+        // First pass: walk the full hierarchy looking for `.rblint.toml`.
         // Along the way, remember the nearest `.rubocop.yml` as a fallback.
         let mut nearest_rubocop: Option<std::path::PathBuf> = None;
         let mut dir: &Path = &canonical;
         loop {
-            let config_path = dir.join(".rlint.toml");
+            let config_path = dir.join(".rblint.toml");
             if config_path.exists() {
                 match std::fs::read_to_string(&config_path) {
                     Ok(content) => match toml::from_str(&content) {
@@ -103,7 +103,7 @@ impl Config {
                 }
             }
 
-            // Record the nearest .rubocop.yml (but keep walking up for .rlint.toml)
+            // Record the nearest .rubocop.yml (but keep walking up for .rblint.toml)
             if nearest_rubocop.is_none() {
                 let rubocop_path = dir.join(".rubocop.yml");
                 if rubocop_path.exists() {
@@ -117,7 +117,7 @@ impl Config {
             }
         }
 
-        // No .rlint.toml found anywhere — fall back to the nearest .rubocop.yml
+        // No .rblint.toml found anywhere — fall back to the nearest .rubocop.yml
         if let Some(rubocop_path) = nearest_rubocop {
             return Config::from_rubocop(&rubocop_path);
         }
@@ -186,12 +186,12 @@ ignore = ["R003", "R010"]
     }
 
     #[test]
-    fn rlint_toml_in_parent_wins_over_rubocop_in_child() {
-        // Layout: parent/.rlint.toml  and  parent/child/.rubocop.yml
-        // Loading from child/ should find the parent .rlint.toml and NOT use
+    fn rblint_toml_in_parent_wins_over_rubocop_in_child() {
+        // Layout: parent/.rblint.toml  and  parent/child/.rubocop.yml
+        // Loading from child/ should find the parent .rblint.toml and NOT use
         // the child .rubocop.yml.
         let dir = write_temp_files(&[
-            (".rlint.toml", "line-length = 77\n"),
+            (".rblint.toml", "line-length = 77\n"),
             ("child/.rubocop.yml", "Layout/LineLength:\n  Max: 999\n"),
         ]);
         let child = dir.path().join("child");
@@ -199,18 +199,18 @@ ignore = ["R003", "R010"]
         let cfg = Config::load(&child);
         assert_eq!(
             cfg.line_length, 77,
-            ".rlint.toml in parent should win over .rubocop.yml in child"
+            ".rblint.toml in parent should win over .rubocop.yml in child"
         );
     }
 
     #[test]
-    fn rubocop_fallback_only_when_no_rlint_toml() {
-        // Layout: only a .rubocop.yml exists — no .rlint.toml anywhere
+    fn rubocop_fallback_only_when_no_rblint_toml() {
+        // Layout: only a .rubocop.yml exists — no .rblint.toml anywhere
         let dir = write_temp_files(&[(".rubocop.yml", "Layout/LineLength:\n  Max: 88\n")]);
         let cfg = Config::load(dir.path());
         assert_eq!(
             cfg.line_length, 88,
-            ".rubocop.yml should be used when no .rlint.toml is present"
+            ".rubocop.yml should be used when no .rblint.toml is present"
         );
     }
 }

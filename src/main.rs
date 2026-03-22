@@ -38,7 +38,7 @@ fn main() {
             Some(path) => match rubocop_compat::load_rubocop_yml(&path) {
                 Some(rubocop_cfg) => {
                     let config = rubocop_compat::convert_to_config(&rubocop_cfg);
-                    print!("{}", rubocop_compat::generate_rlint_toml(&config));
+                    print!("{}", rubocop_compat::generate_rblint_toml(&config));
                 }
                 None => {
                     eprintln!("Error: Failed to parse .rubocop.yml");
@@ -49,7 +49,7 @@ fn main() {
         return;
     }
 
-    // Load config from .rlint.toml (walk up from CWD)
+    // Load config from .rblint.toml (walk up from CWD)
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut config = Config::load(&cwd);
 
