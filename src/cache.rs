@@ -150,11 +150,17 @@ pub struct Cache {
 }
 
 impl Cache {
+    /// Maximum cache file size (50 MiB).  Files larger than this are treated
+    /// as corrupt / malicious and silently ignored.
+    const MAX_CACHE_SIZE: u64 = 50 * 1024 * 1024;
+
     /// Load cache from `cache_path`.  Returns an empty cache on any error
-    /// (missing file, corrupted data, etc.).
+    /// (missing file, corrupted data, size exceeds limit, etc.).
     pub fn load(cache_path: &Path) -> Self {
-        let entries: HashMap<PathBuf, CacheEntry> = std::fs::read(cache_path)
+        let entries: HashMap<PathBuf, CacheEntry> = std::fs::metadata(cache_path)
             .ok()
+            .filter(|m| m.len() <= Self::MAX_CACHE_SIZE)
+            .and_then(|_| std::fs::read(cache_path).ok())
             .and_then(|bytes| bincode::deserialize(&bytes).ok())
             .unwrap_or_default();
         Cache {

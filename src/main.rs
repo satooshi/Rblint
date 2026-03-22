@@ -12,6 +12,7 @@ use rblint::config::Config;
 use rblint::diagnostic::{Diagnostic, Severity};
 use rblint::linter::Linter;
 use rblint::reporter::{OutputFormat, Reporter};
+use std::sync::RwLock;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -184,7 +185,7 @@ fn lint_files(
     effective_select: &Option<Vec<String>>,
     effective_ignore: &Option<Vec<String>>,
     errors_only: bool,
-    cache: Option<&std::sync::Mutex<Cache>>,
+    cache: Option<&RwLock<Cache>>,
     config_hash: u64,
 ) -> Vec<(String, Vec<Diagnostic>)> {
     files
@@ -193,10 +194,10 @@ fn lint_files(
             let source = std::fs::read_to_string(path).ok()?;
             let content_hash = hash_content(&source);
 
-            // Attempt cache lookup
-            let raw_diags: Vec<Diagnostic> = if let Some(cache_mutex) = cache {
+            // Attempt cache lookup (read lock for lookup, write lock only on miss)
+            let raw_diags: Vec<Diagnostic> = if let Some(cache_rw) = cache {
                 let hit = {
-                    let c = cache_mutex.lock().unwrap();
+                    let c = cache_rw.read().unwrap();
                     c.lookup(std::path::Path::new(path), content_hash, config_hash)
                 };
                 if let Some(cached) = hit {
@@ -204,7 +205,7 @@ fn lint_files(
                 } else {
                     let fresh = linter.lint_file(path, &source);
                     {
-                        let mut c = cache_mutex.lock().unwrap();
+                        let mut c = cache_rw.write().unwrap();
                         c.store(PathBuf::from(path), content_hash, config_hash, &fresh);
                     }
                     fresh
@@ -246,7 +247,7 @@ fn run_lint_pass(
     cli_errors_only: bool,
     cli_fix: bool,
     cli_statistics: bool,
-    cache: Option<&std::sync::Mutex<Cache>>,
+    cache: Option<&RwLock<Cache>>,
     config_hash: u64,
 ) -> bool {
     let start = Instant::now();
@@ -306,7 +307,12 @@ fn run_lint_pass(
         .filter(|d| !cli_errors_only || d.severity == Severity::Error)
         .cloned()
         .collect();
-    flat_diags.sort_by(|a, b| a.file.cmp(&b.file).then(a.line.cmp(&b.line)));
+    flat_diags.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.col.cmp(&b.col))
+    });
 
     reporter.print(&flat_diags);
 
@@ -335,7 +341,7 @@ fn main() {
     config.exclude.push(".rblint_cache".to_string());
 
     // CLI flags override config file values
-    let selected = cli
+    let cli_select = cli
         .select
         .as_deref()
         .and_then(rblint::linter::parse_rule_list);
@@ -347,7 +353,7 @@ fn main() {
         }
     }
 
-    let mut effective_select = selected.or_else(|| {
+    let mut effective_select = cli_select.clone().or_else(|| {
         if config.select.is_empty() {
             None
         } else {
@@ -392,10 +398,10 @@ fn main() {
 
     // Optionally load cache
     let cache_path = cwd.join(".rblint_cache");
-    let cache_mutex: Option<std::sync::Mutex<Cache>> = if cli.no_cache {
+    let cache_lock: Option<RwLock<Cache>> = if cli.no_cache {
         None
     } else {
-        Some(std::sync::Mutex::new(Cache::load(&cache_path)))
+        Some(RwLock::new(Cache::load(&cache_path)))
     };
     if cli.watch {
         run_watch_mode(
@@ -404,12 +410,13 @@ fn main() {
             &exclude_patterns,
             &config,
             &reporter,
+            &cli_select,
             &effective_select,
             &effective_ignore,
             cli.errors_only,
             cli.fix,
             cli.statistics,
-            cache_mutex.as_ref(),
+            cache_lock.as_ref(),
             config_hash,
         );
     } else {
@@ -422,13 +429,13 @@ fn main() {
             cli.errors_only,
             cli.fix,
             cli.statistics,
-            cache_mutex.as_ref(),
+            cache_lock.as_ref(),
             config_hash,
         );
 
         // Save cache
-        if let Some(c) = &cache_mutex {
-            c.lock().unwrap().save();
+        if let Some(c) = &cache_lock {
+            c.read().unwrap().save();
         }
 
         if !cli.no_fail && has_errors {
@@ -437,19 +444,50 @@ fn main() {
     }
 }
 
+/// Derive effective select/ignore from a config, applying CLI overrides.
+fn compute_effective_select(
+    config: &Config,
+    cli_select: &Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    let mut effective = cli_select.clone().or_else(|| {
+        if config.select.is_empty() {
+            None
+        } else {
+            Some(config.select.clone())
+        }
+    });
+    if !config.extend_select.is_empty() {
+        if let Some(ref mut sel) = effective {
+            sel.extend(config.extend_select.iter().cloned());
+            sel.sort_unstable();
+            sel.dedup();
+        }
+    }
+    effective
+}
+
+fn compute_effective_ignore(config: &Config) -> Option<Vec<String>> {
+    if config.ignore.is_empty() {
+        None
+    } else {
+        Some(config.ignore.clone())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_watch_mode(
     watch_paths: &[String],
     initial_files: &[String],
-    exclude_patterns: &[glob::Pattern],
+    initial_exclude_patterns: &[glob::Pattern],
     initial_config: &rblint::config::Config,
     reporter: &Reporter,
-    effective_select: &Option<Vec<String>>,
-    effective_ignore: &Option<Vec<String>>,
+    cli_select: &Option<Vec<String>>,
+    initial_effective_select: &Option<Vec<String>>,
+    initial_effective_ignore: &Option<Vec<String>>,
     errors_only: bool,
     fix: bool,
     statistics: bool,
-    cache: Option<&std::sync::Mutex<Cache>>,
+    cache: Option<&RwLock<Cache>>,
     config_hash: u64,
 ) {
     use notify::event::{EventKind, ModifyKind};
@@ -467,14 +505,18 @@ fn run_watch_mode(
     // Mutable state that may be updated when .rlint.toml changes
     let mut current_linter = Linter::with_config(initial_config);
     let mut current_config_hash = config_hash;
+    let mut current_effective_select = initial_effective_select.clone();
+    let mut current_effective_ignore = initial_effective_ignore.clone();
+    let mut current_exclude_patterns = initial_exclude_patterns.to_vec();
+    let mut cache_dirty = false;
 
     // Initial lint
     run_lint_pass(
         initial_files,
         &current_linter,
         reporter,
-        effective_select,
-        effective_ignore,
+        &current_effective_select,
+        &current_effective_ignore,
         errors_only,
         fix,
         statistics,
@@ -482,7 +524,7 @@ fn run_watch_mode(
         current_config_hash,
     );
     if let Some(c) = cache {
-        c.lock().unwrap().save();
+        c.read().unwrap().save();
     }
     eprintln!("\n[watching for changes... press Ctrl+C to stop]");
 
@@ -548,7 +590,7 @@ fn run_watch_mode(
                         {
                             let raw = p.to_string_lossy();
                             let s = normalize_path(&raw);
-                            if !is_excluded(s, exclude_patterns) {
+                            if !is_excluded(s, &current_exclude_patterns) {
                                 return Some(s.to_string());
                             }
                         }
@@ -566,17 +608,22 @@ fn run_watch_mode(
                 // Drain remaining queued events to avoid redundant re-lints
                 while rx.try_recv().is_ok() {}
 
-                // Reload config and rebuild linter when .rlint.toml changes
+                // Reload config and rebuild linter when .rlint.toml changes,
+                // recomputing effective_select, effective_ignore, and exclude patterns.
                 if config_changed {
                     eprintln!("[.rlint.toml changed, reloading config]");
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-                    let new_config = rblint::config::Config::load(&cwd);
+                    let mut new_config = rblint::config::Config::load(&cwd);
+                    new_config.exclude.push(".rblint_cache".to_string());
                     current_config_hash = hash_config(&new_config);
                     current_linter = Linter::with_config(&new_config);
+                    current_effective_select = compute_effective_select(&new_config, cli_select);
+                    current_effective_ignore = compute_effective_ignore(&new_config);
+                    current_exclude_patterns = compile_exclude_patterns(&new_config.exclude);
                 }
 
                 // Re-collect full file list in case files were added/removed
-                let files = collect_ruby_files(watch_paths, exclude_patterns);
+                let files = collect_ruby_files(watch_paths, &current_exclude_patterns);
 
                 if files.is_empty() {
                     eprintln!("No Ruby files found.");
@@ -587,17 +634,15 @@ fn run_watch_mode(
                         &files,
                         &current_linter,
                         reporter,
-                        effective_select,
-                        effective_ignore,
+                        &current_effective_select,
+                        &current_effective_ignore,
                         errors_only,
                         fix,
                         statistics,
                         cache,
                         current_config_hash,
                     );
-                    if let Some(c) = cache {
-                        c.lock().unwrap().save();
-                    }
+                    cache_dirty = true;
                 }
 
                 eprintln!("\n[watching for changes... press Ctrl+C to stop]");
@@ -608,9 +653,11 @@ fn run_watch_mode(
         }
     }
 
-    // Save cache on exit
-    if let Some(c) = cache {
-        c.lock().unwrap().save();
+    // Save cache on exit only if modified
+    if cache_dirty {
+        if let Some(c) = cache {
+            c.read().unwrap().save();
+        }
     }
 
     eprintln!("\nStopped.");
