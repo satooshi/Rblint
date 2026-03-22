@@ -7,6 +7,7 @@ use rblint::config::Config;
 use rblint::diagnostic::{Diagnostic, Severity};
 use rblint::linter::Linter;
 use rblint::reporter::{OutputFormat, Reporter};
+use rblint::rubocop_compat;
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Format {
@@ -96,6 +97,10 @@ struct Cli {
     /// Show statistics about rule violations
     #[arg(long)]
     statistics: bool,
+
+    /// Read .rubocop.yml and print an equivalent .rlint.toml to stdout
+    #[arg(long)]
+    migrate_config: bool,
 }
 
 /// Compile exclude glob patterns once, warning on invalid entries.
@@ -202,6 +207,35 @@ fn lint_files(
 fn main() {
     let cli = Cli::parse();
     let start = Instant::now();
+
+    // Handle --migrate-config: find .rubocop.yml using provided path or CWD.
+    // `cli.paths[0]` is the user-supplied path (defaults to ".").
+    if cli.migrate_config {
+        let start_dir = std::path::Path::new(&cli.paths[0])
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&cli.paths[0]));
+        let rubocop_path = rblint::config::find_file_in_ancestors(&start_dir, ".rubocop.yml");
+        match rubocop_path {
+            None => {
+                eprintln!(
+                    "Error: .rubocop.yml not found in {} or any parent directory",
+                    start_dir.display()
+                );
+                std::process::exit(1);
+            }
+            Some(path) => match rubocop_compat::load_rubocop_yml(&path) {
+                Some(rubocop_cfg) => {
+                    let config = rubocop_compat::convert_to_config(&rubocop_cfg);
+                    print!("{}", rubocop_compat::generate_rlint_toml(&config));
+                }
+                None => {
+                    eprintln!("Error: Failed to parse .rubocop.yml");
+                    std::process::exit(1);
+                }
+            },
+        }
+        return;
+    }
 
     // Load config from .rlint.toml (walk up from CWD)
     let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
