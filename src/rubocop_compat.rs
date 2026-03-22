@@ -84,9 +84,36 @@ fn load_rubocop_yml_raw(path: &Path) -> Option<RuboCopConfig> {
     }
 }
 
+/// Deep-merge `overlay` into `base`, following these rules:
+/// - Mappings: recursively merge key-by-key (overlay wins for conflicting scalars).
+/// - Sequences: concatenate (`base` entries first, then `overlay` entries).
+/// - Scalars / mismatched types: overlay wins.
+fn deep_merge_value(base: &mut serde_yml::Value, overlay: serde_yml::Value) {
+    match (base, overlay) {
+        (serde_yml::Value::Mapping(base_map), serde_yml::Value::Mapping(overlay_map)) => {
+            for (k, v) in overlay_map {
+                match base_map.get_mut(&k) {
+                    Some(existing) => deep_merge_value(existing, v),
+                    None => {
+                        base_map.insert(k, v);
+                    }
+                }
+            }
+        }
+        (serde_yml::Value::Sequence(base_seq), serde_yml::Value::Sequence(overlay_seq)) => {
+            base_seq.extend(overlay_seq);
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
 /// Load and parse a `.rubocop.yml` file from `path`, resolving `inherit_from`
-/// references.  Inherited files are merged in order (later files override
-/// earlier ones); the main file then wins on all conflicts.
+/// references transitively.  Inherited files are merged in order (later files
+/// override earlier ones); the main file then wins on all conflicts.
+///
+/// Mappings (e.g. `AllCops`, cop blocks) are merged at the field level rather
+/// than replaced wholesale.  Sequences (e.g. `AllCops: Exclude`) are
+/// concatenated so that neither file's entries are lost.
 ///
 /// Returns `None` only when the main file itself cannot be read or parsed.
 /// Errors in inherited files are skipped with a warning (best-effort merge).
@@ -120,18 +147,32 @@ pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
         return Some(main);
     }
 
-    // Merge: start with inherited files (in order), then overlay main.
+    // Merge: start with inherited files (resolved transitively, in order),
+    // then overlay main.  Deep-merge so that nested mappings and sequences
+    // are combined rather than replaced.
     let mut merged = RuboCopConfig::default();
     for inh_path in &inherited_paths {
-        if let Some(inh_cfg) = load_rubocop_yml_raw(inh_path) {
+        // Recursive call resolves each inherited file's own `inherit_from`.
+        if let Some(inh_cfg) = load_rubocop_yml(inh_path) {
             for (k, v) in inh_cfg.cops {
-                merged.cops.insert(k, v);
+                match merged.cops.get_mut(&k) {
+                    Some(existing) => deep_merge_value(existing, v),
+                    None => {
+                        merged.cops.insert(k, v);
+                    }
+                }
             }
         }
     }
-    // Main file wins — overwrite any key set by inherited files.
+    // Main file wins — deep-merge so that e.g. AllCops keys from inherited
+    // files are preserved unless explicitly overridden.
     for (k, v) in main.cops {
-        merged.cops.insert(k, v);
+        match merged.cops.get_mut(&k) {
+            Some(existing) => deep_merge_value(existing, v),
+            None => {
+                merged.cops.insert(k, v);
+            }
+        }
     }
 
     Some(merged)

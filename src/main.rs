@@ -206,15 +206,18 @@ fn main() {
     let cli = Cli::parse();
     let start = Instant::now();
 
-    // Handle --migrate-config: find .rubocop.yml by walking up from CWD
+    // Handle --migrate-config: find .rubocop.yml using provided path or CWD.
+    // `cli.paths[0]` is the user-supplied path (defaults to ".").
     if cli.migrate_config {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-        let rubocop_path = rblint::config::find_file_in_ancestors(&cwd, ".rubocop.yml");
+        let start_dir = std::path::Path::new(&cli.paths[0])
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(&cli.paths[0]));
+        let rubocop_path = rblint::config::find_file_in_ancestors(&start_dir, ".rubocop.yml");
         match rubocop_path {
             None => {
                 eprintln!(
                     "Error: .rubocop.yml not found in {} or any parent directory",
-                    cwd.display()
+                    start_dir.display()
                 );
                 std::process::exit(1);
             }
