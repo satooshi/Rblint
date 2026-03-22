@@ -233,10 +233,14 @@ impl Rule for ComplexityRule {
                 }
 
                 let param_count = if j < tokens.len() && tokens[j].kind == TokenKind::LParen {
-                    // Paren form: count commas at depth 1
+                    // Paren form: count commas at top level only (paren_depth==1,
+                    // bracket_depth==0, brace_depth==0) to avoid counting commas
+                    // inside default-value arrays/hashes like `def foo(a = [1, 2], b)`.
                     j += 1; // skip (
                     let mut count = 0usize;
                     let mut paren_depth = 1usize;
+                    let mut bracket_depth = 0usize;
+                    let mut brace_depth = 0usize;
                     let mut found_param = false;
 
                     while j < tokens.len() && paren_depth > 0 {
@@ -251,7 +255,23 @@ impl Rule for ComplexityRule {
                                     count += 1;
                                 }
                             }
-                            TokenKind::Comma if paren_depth == 1 => {
+                            TokenKind::LBracket => {
+                                bracket_depth += 1;
+                                found_param = true;
+                            }
+                            TokenKind::RBracket => {
+                                bracket_depth = bracket_depth.saturating_sub(1);
+                            }
+                            TokenKind::LBrace => {
+                                brace_depth += 1;
+                                found_param = true;
+                            }
+                            TokenKind::RBrace => {
+                                brace_depth = brace_depth.saturating_sub(1);
+                            }
+                            TokenKind::Comma
+                                if paren_depth == 1 && bracket_depth == 0 && brace_depth == 0 =>
+                            {
                                 count += 1;
                                 found_param = false;
                             }
@@ -446,6 +466,20 @@ mod tests {
             .expect("R043 expected");
         assert!(r043.message.contains("bar"));
         assert!(r043.message.contains('6'));
+    }
+
+    #[test]
+    fn no_violation_default_array_param() {
+        // `def foo(a = [1, 2], b, c, d, e)` has 5 real params, not 6
+        let src = "def foo(a = [1, 2], b, c, d, e)\nend\n";
+        assert!(!has_rule(&check(src), "R043"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn no_violation_default_hash_param() {
+        // Default hash value commas must not be counted
+        let src = "def foo(a = {x: 1, y: 2}, b, c, d, e)\nend\n";
+        assert!(!has_rule(&check(src), "R043"), "{:?}", check(src));
     }
 
     #[test]

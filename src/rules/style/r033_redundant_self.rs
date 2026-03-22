@@ -16,12 +16,16 @@ impl Rule for RedundantSelfRule {
         let mut diags = Vec::new();
         let tokens = ctx.tokens;
 
-        // Track whether we are inside an instance method body
-        // (i.e. inside a `def` that is NOT `def self.foo`)
-        let mut method_depth = 0usize;
-        let mut block_depth = 0usize; // overall block depth for nesting
-                                      // Track local variable names per method scope. When a local `foo` is in scope,
-                                      // `self.foo` is NOT redundant because bare `foo` would resolve to the local.
+        // Stack-based block tracking: each entry is true if the block is an
+        // instance method def (non-class-method). This correctly handles
+        // `class C; def foo; end; self.bar; end` — when def's `end` is popped,
+        // the remaining stack only has the `class` entry (false), so method
+        // scope is cleared correctly.
+        let mut block_stack: Vec<bool> = Vec::new();
+
+        // Track local variable names per instance-method scope.
+        // When a local `foo` is in scope, `self.foo` is NOT redundant because
+        // bare `foo` would resolve to the local rather than the method.
         let mut locals_stack: Vec<HashSet<String>> = Vec::new();
 
         let mut i = 0;
@@ -37,14 +41,14 @@ impl Rule for RedundantSelfRule {
                         && tokens[j].kind == TokenKind::Self_
                         && tokens.get(j + 1).map(|t| t.kind == TokenKind::Dot) == Some(true);
 
-                    block_depth += 1;
-                    if !is_class_method {
-                        method_depth += 1;
+                    let is_instance_method = !is_class_method;
+                    block_stack.push(is_instance_method);
+                    if is_instance_method {
                         locals_stack.push(HashSet::new());
                     }
                 }
                 TokenKind::Class | TokenKind::Module | TokenKind::Do | TokenKind::Begin => {
-                    block_depth += 1;
+                    block_stack.push(false);
                 }
                 TokenKind::If
                 | TokenKind::Unless
@@ -61,19 +65,20 @@ impl Rule for RedundantSelfRule {
                         Some(p) => matches!(p.kind, TokenKind::Newline),
                     };
                     if at_statement_start {
-                        block_depth += 1;
+                        block_stack.push(false);
                     }
                 }
                 TokenKind::End => {
-                    block_depth = block_depth.saturating_sub(1);
-                    if method_depth > 0 && block_depth < method_depth {
-                        method_depth -= 1;
-                        locals_stack.pop();
+                    if let Some(was_instance_method) = block_stack.pop() {
+                        if was_instance_method {
+                            locals_stack.pop();
+                        }
                     }
                 }
                 TokenKind::Ident => {
                     // Track local variable assignments: `foo = ...` (but not `foo == ...`)
-                    if method_depth > 0 {
+                    let in_method = block_stack.iter().any(|&b| b);
+                    if in_method {
                         let next_meaningful = (i + 1..tokens.len())
                             .find(|&k| tokens[k].kind != TokenKind::Whitespace);
                         if let Some(nxt) = next_meaningful {
@@ -92,8 +97,10 @@ impl Rule for RedundantSelfRule {
                     }
                 }
                 TokenKind::Self_ => {
-                    // Only flag inside instance method bodies
-                    if method_depth == 0 {
+                    // Only flag when directly inside an instance method scope
+                    // (the innermost enclosing def must be an instance method)
+                    let in_method = block_stack.iter().rev().any(|&b| b);
+                    if !in_method {
                         i += 1;
                         continue;
                     }
@@ -129,13 +136,23 @@ impl Rule for RedundantSelfRule {
                             .is_some_and(|s| s.contains(name_tok.text.as_str()));
 
                         if !is_setter && !has_same_name_local {
-                            // Build the fix: remove `self.` from the line
+                            // Build the fix: remove `self.` at the exact token column position.
+                            // Use byte-column to avoid corrupting string literals earlier on the line.
                             let line_text = ctx
                                 .lines
                                 .get(tokens[i].line.saturating_sub(1))
                                 .copied()
                                 .unwrap_or("");
-                            let fix = line_text.replacen("self.", "", 1);
+                            // col is 1-indexed byte column
+                            let col0 = tokens[i].col.saturating_sub(1);
+                            let fix = if col0 + 5 <= line_text.len()
+                                && line_text.as_bytes().get(col0..col0 + 5) == Some(b"self.")
+                            {
+                                format!("{}{}", &line_text[..col0], &line_text[col0 + 5..])
+                            } else {
+                                // Fallback: should not happen in well-formed source
+                                line_text.replacen("self.", "", 1)
+                            };
 
                             diags.push(
                                 Diagnostic::new(
@@ -220,5 +237,30 @@ mod tests {
         // No local `bar` in scope — `self.bar` is redundant
         let src = "def foo\n  self.bar\nend\n";
         assert!(has_rule(&check(src), "R033"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn no_violation_after_method_ends() {
+        // After def foo; end, we're back in class scope — `self.bar` is needed
+        let src = "class C\n  def foo\n  end\n  self.bar\nend\n";
+        assert!(!has_rule(&check(src), "R033"), "{:?}", check(src));
+    }
+
+    #[test]
+    fn fix_does_not_corrupt_string_literal() {
+        // `self.` inside a string must not be removed — only the actual self.bar call
+        let src = "def foo\n  puts \"self.x\"; self.bar\nend\n";
+        let diags = check(src);
+        let d = diags.iter().find(|d| d.rule == "R033");
+        if let Some(d) = d {
+            let fix = d.fix.as_deref().unwrap_or("");
+            // The string literal `"self.x"` must remain intact
+            assert!(
+                fix.contains("\"self.x\""),
+                "string literal corrupted: {fix}"
+            );
+            // The actual self.bar call should be replaced
+            assert!(!fix.ends_with("self.bar"), "self.bar not fixed: {fix}");
+        }
     }
 }
