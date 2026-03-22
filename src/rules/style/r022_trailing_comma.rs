@@ -19,24 +19,25 @@ impl Rule for TrailingCommaRule {
             let tok = &tokens[i];
 
             if tok.kind == TokenKind::Comma {
-                if let Some(next) = tokens.get(i + 1) {
-                    let real_next =
-                        if next.kind == TokenKind::Whitespace || next.kind == TokenKind::Newline {
-                            tokens.get(i + 2)
-                        } else {
-                            Some(next)
-                        };
-                    if let Some(rn) = real_next {
-                        if rn.kind == TokenKind::RParen {
-                            diags.push(Diagnostic::new(
-                                ctx.file,
-                                tok.line,
-                                tok.col,
-                                "R022",
-                                "Avoid trailing comma before closing parenthesis",
-                                Severity::Warning,
-                            ));
-                        }
+                // Skip all trivia (whitespace and newlines) to find the real next token.
+                let mut j = i + 1;
+                while let Some(t) = tokens.get(j) {
+                    if t.kind == TokenKind::Whitespace || t.kind == TokenKind::Newline {
+                        j += 1;
+                    } else {
+                        break;
+                    }
+                }
+                if let Some(rn) = tokens.get(j) {
+                    if rn.kind == TokenKind::RParen {
+                        diags.push(Diagnostic::new(
+                            ctx.file,
+                            tok.line,
+                            tok.col,
+                            "R022",
+                            "Avoid trailing comma before closing parenthesis",
+                            Severity::Warning,
+                        ));
                     }
                 }
             }
@@ -79,8 +80,23 @@ mod tests {
     #[test]
     fn violation_trailing_comma_before_rparen_multiline() {
         // foo(a, b,
-        // )  ← should trigger R022
+        // )
         let diags = check("foo(a, b,\n)");
+        assert!(has_rule(&diags, "R022"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_trailing_comma_newline_indent_rparen() {
+        // foo(a, b,
+        //   )  ← indented closing paren
+        let diags = check("foo(a, b,\n  )");
+        assert!(has_rule(&diags, "R022"), "{diags:?}");
+    }
+
+    #[test]
+    fn violation_trailing_comma_space_then_newline() {
+        // foo(a, b, \n)  ← space before newline
+        let diags = check("foo(a, b, \n)");
         assert!(has_rule(&diags, "R022"), "{diags:?}");
     }
 }
