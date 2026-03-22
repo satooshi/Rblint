@@ -83,7 +83,7 @@ impl Diagnostic {
     }
 
     pub fn with_delete_line_fix(mut self) -> Self {
-        self.fix = Some(String::new());
+        self.fix = Some("<delete line>".to_string());
         self.fix_kind = FixKind::DeleteLine;
         self
     }

@@ -49,8 +49,7 @@ impl Rule for StyleRule {
         let tokens = ctx.tokens;
 
         // R020: No semicolons at end of line (use newline instead)
-        // Fix: split `x = 1; y = 2` into two lines with proper indentation.
-        // Skip semicolons inside string literals.
+        // Warning only (no auto-fix). Skip semicolons inside string literals.
         for tok in tokens {
             if tok.kind == TokenKind::Semicolon {
                 // tok.col is 1-based character column; convert to 0-based byte offset
@@ -66,35 +65,23 @@ impl Rule for StyleRule {
                 if is_inside_string(line, col_byte) {
                     continue;
                 }
-                let mut diag = Diagnostic::new(
+                // No auto-fix for R020: splitting at semicolons requires multi-line
+                // fix support which the fixer does not yet implement.
+                diags.push(Diagnostic::new(
                     ctx.file,
                     tok.line,
                     tok.col,
                     "R020",
                     "Avoid using semicolons to separate statements; use a newline instead",
                     Severity::Warning,
-                );
-                // Build fix: split at the token's semicolon position, indent second statement
-                let indent = leading_whitespace(line);
-                // Use the token's byte position (col_byte) to locate the exact semicolon
-                let semi_pos = col_byte;
-                if semi_pos < line.len() && line.as_bytes().get(semi_pos) == Some(&b';') {
-                    let before = line[..semi_pos].trim_end();
-                    let after = line[semi_pos + 1..].trim_start();
-                    if !after.is_empty() {
-                        let fixed = format!("{}\n{}{}", before, indent, after);
-                        diag = diag.with_fix(fixed);
-                    }
-                }
-                diags.push(diag);
+                ));
             }
         }
 
         // R021: Space around operators (=, ==, !=, <, >, etc.)
         // Fix: insert missing spaces around the operator on the whole line.
         // Exclude ** (exponent) — the lexer emits two Star tokens, so we skip
-        // Star when the previous non-ws real token is also Star.
-        // Exclude default argument `=` (inside method def parameter list).
+        // both stars when they appear consecutively.
         let mut i = 1;
         while i < tokens.len() {
             let tok = &tokens[i];
@@ -116,13 +103,23 @@ impl Rule for StyleRule {
             );
 
             if is_binary_op {
-                // Exclude `**` (exponent): Star preceded by another Star (possibly with whitespace)
+                // Exclude `**` (exponent): Star preceded by another Star (possibly with whitespace).
+                // Skip *both* stars so neither triggers a spacing diagnostic.
                 if tok.kind == TokenKind::Star {
+                    // Check if this star is the second of a `**` pair
                     let prev_real = tokens[..i]
                         .iter()
                         .rev()
                         .find(|t| t.kind != TokenKind::Whitespace);
                     if prev_real.is_some_and(|t| t.kind == TokenKind::Star) {
+                        i += 1;
+                        continue;
+                    }
+                    // Check if this star is the first of a `**` pair
+                    let next_real = tokens[i + 1..]
+                        .iter()
+                        .find(|t| t.kind != TokenKind::Whitespace);
+                    if next_real.is_some_and(|t| t.kind == TokenKind::Star) {
                         i += 1;
                         continue;
                     }
@@ -270,37 +267,74 @@ impl Rule for StyleRule {
         }
 
         // R026: Missing blank line between method definitions
-        // When `end` of one method is immediately followed by `def` of the next method
-        // (with no blank line between), warn and insert a blank line.
-        // We look at line-level patterns: an "end" line followed directly by a "def" line
-        // at the same indentation level (to avoid false positives like `class A\nend\ndef foo`).
-        for i in 0..ctx.lines.len().saturating_sub(1) {
-            let current = ctx.lines[i];
-            let next = ctx.lines[i + 1];
-            let current_trimmed = current.trim();
-            let next_trimmed = next.trim();
-            if current_trimmed == "end"
-                && (next_trimmed.starts_with("def ") || next_trimmed == "def")
-            {
-                // Only fire if both lines share the same leading indentation,
-                // which indicates the `end` closes a method at the same level as the `def`.
-                let end_indent = leading_whitespace(current);
-                let def_indent = leading_whitespace(next);
-                if end_indent != def_indent {
+        // Track a stack of block-opening keywords so we know whether an `end` closes a `def`.
+        // Only fire when a method-closing `end` is immediately followed by `def` with no
+        // blank line in between.
+        {
+            // Build a set of lines that have a method-closing `end` by scanning tokens
+            // with a simple keyword stack (def/class/module/do/if/unless/while/until/for/begin/case).
+            let mut block_stack: Vec<TokenKind> = Vec::new();
+            let mut method_end_lines = std::collections::HashSet::new();
+            for tok in tokens {
+                match tok.kind {
+                    TokenKind::Def
+                    | TokenKind::Class
+                    | TokenKind::Module
+                    | TokenKind::Do
+                    | TokenKind::If
+                    | TokenKind::Unless
+                    | TokenKind::While
+                    | TokenKind::Until
+                    | TokenKind::For
+                    | TokenKind::Begin
+                    | TokenKind::Case => {
+                        // Only push if the keyword starts a block (first non-ws token on line
+                        // or after certain tokens). As a heuristic, always push — the stack
+                        // depth only needs to pair def/end correctly at the same level.
+                        block_stack.push(tok.kind.clone());
+                    }
+                    TokenKind::End => {
+                        if let Some(opener) = block_stack.pop() {
+                            if opener == TokenKind::Def {
+                                method_end_lines.insert(tok.line);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            for i in 0..ctx.lines.len().saturating_sub(1) {
+                let line_no = i + 1; // 1-based
+                if !method_end_lines.contains(&line_no) {
                     continue;
                 }
-                // Warn on the `def` line (i+2 is 1-based)
-                diags.push(
-                    Diagnostic::new(
-                        ctx.file,
-                        i + 2,
-                        1,
-                        "R026",
-                        "Missing blank line between method definitions",
-                        Severity::Warning,
-                    )
-                    .with_insert_before_fix(String::new()),
-                );
+                let current = ctx.lines[i];
+                let next = ctx.lines[i + 1];
+                let current_trimmed = current.trim();
+                let next_trimmed = next.trim();
+                if current_trimmed == "end"
+                    && (next_trimmed.starts_with("def ") || next_trimmed == "def")
+                {
+                    let end_indent = leading_whitespace(current);
+                    let def_indent = leading_whitespace(next);
+                    if end_indent != def_indent {
+                        continue;
+                    }
+                    diags.push(
+                        Diagnostic::new(
+                            ctx.file,
+                            i + 2,
+                            1,
+                            "R026",
+                            "Missing blank line between method definitions",
+                            Severity::Warning,
+                        )
+                        // Empty string = blank line (the fixer inserts it as a new line
+                        // in the lines vector, producing a blank line in the output).
+                        .with_insert_before_fix(String::new()),
+                    );
+                }
             }
         }
 
@@ -310,55 +344,81 @@ impl Rule for StyleRule {
 
 /// Heuristic: add missing spaces around binary operators in a line of Ruby code.
 /// This handles simple cases like `x==y` → `x == y`.
+///
+/// Uses a single left-to-right pass, matching the longest operator first at each
+/// position. This avoids the quadratic cost of repeated `is_inside_string` calls
+/// and prevents multi-pass corruption of operators.
 fn fix_operator_spacing(line: &str) -> String {
     // Operators to fix, ordered longest-first to avoid partial matches.
-    // `<=>` must come before `<=` and `>=`; `==` before `=`, etc.
     let ops: &[&str] = &[
         "<=>", "==", "!=", "<=", ">=", "&&", "||", "<", ">", "+", "-", "*", "/",
     ];
 
-    let mut result = line.to_string();
-    for op in ops {
-        result = fix_single_op(&result, op);
-    }
-    result
-}
+    let mut out = String::with_capacity(line.len() + 8);
+    let bytes = line.as_bytes();
+    let mut i = 0; // byte index
+    let mut in_string = false;
+    let mut quote_char = b'"';
+    let mut escaped = false;
 
-/// Ensure spaces around `op` in `line`, skipping inside string literals.
-fn fix_single_op(line: &str, op: &str) -> String {
-    let op_len = op.len(); // byte length (all ops are ASCII)
-    let mut out = String::with_capacity(line.len() + 4);
-    // Collect (byte_offset, char) pairs so we can slice safely.
-    let chars: Vec<(usize, char)> = line.char_indices().collect();
-    let mut ci = 0; // index into `chars`
+    while i < bytes.len() {
+        let b = bytes[i];
 
-    while ci < chars.len() {
-        let (byte_i, ch) = chars[ci];
+        // Helper: decode one UTF-8 char at position i and push it to out
+        let push_char = |out: &mut String, pos: usize| -> usize {
+            let ch = &line[pos..];
+            if let Some(c) = ch.chars().next() {
+                out.push(c);
+                c.len_utf8()
+            } else {
+                1
+            }
+        };
 
-        // Check if we're inside a string at this byte position
-        if is_inside_string(line, byte_i) {
-            out.push(ch);
-            ci += 1;
+        // Track string state
+        if escaped {
+            escaped = false;
+            i += push_char(&mut out, i);
+            continue;
+        }
+        if in_string {
+            if b == b'\\' {
+                escaped = true;
+            } else if b == quote_char {
+                in_string = false;
+            }
+            i += push_char(&mut out, i);
+            continue;
+        }
+        if b == b'"' || b == b'\'' {
+            in_string = true;
+            quote_char = b;
+            out.push(b as char);
+            i += 1;
             continue;
         }
 
-        // Try to match `op` starting at byte_i (all ops are ASCII, so byte == char boundary)
-        if byte_i + op_len <= line.len() && &line[byte_i..byte_i + op_len] == op {
-            // Determine the byte before/after the operator
-            let before_byte = if byte_i > 0 {
-                line.as_bytes()[byte_i - 1]
-            } else {
-                0
-            };
-            let after_byte = if byte_i + op_len < line.len() {
-                line.as_bytes()[byte_i + op_len]
+        // Try to match the longest operator at position i
+        let mut matched_op: Option<&str> = None;
+        for op in ops {
+            let op_bytes = op.as_bytes();
+            if i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+                matched_op = Some(op);
+                break; // ops are longest-first, so first match is longest
+            }
+        }
+
+        if let Some(op) = matched_op {
+            let op_len = op.len();
+            let before = if i > 0 { bytes[i - 1] } else { 0 };
+            let after = if i + op_len < bytes.len() {
+                bytes[i + op_len]
             } else {
                 0
             };
 
-            let need_space_before = before_byte != b' ' && before_byte != b'\t' && before_byte != 0;
-            let need_space_after =
-                after_byte != b' ' && after_byte != b'\t' && after_byte != 0 && after_byte != b'\n';
+            let need_space_before = before != b' ' && before != b'\t' && before != 0;
+            let need_space_after = after != b' ' && after != b'\t' && after != 0 && after != b'\n';
 
             if need_space_before {
                 out.push(' ');
@@ -367,12 +427,10 @@ fn fix_single_op(line: &str, op: &str) -> String {
             if need_space_after {
                 out.push(' ');
             }
-            // Advance ci past the operator (op is ASCII so each byte == one char)
-            let op_char_count = op.chars().count();
-            ci += op_char_count;
+            i += op_len;
         } else {
-            out.push(ch);
-            ci += 1;
+            // Non-ASCII safe: decode one UTF-8 character
+            i += push_char(&mut out, i);
         }
     }
     out
@@ -426,17 +484,10 @@ mod tests {
     }
 
     #[test]
-    fn fix_semicolon_splits_line() {
+    fn no_fix_for_semicolon() {
+        // R020 does not provide auto-fix (multi-line fix not yet supported)
         let diags = check("x = 1; y = 2");
-        let fix = fix_for_rule(&diags, "R020").expect("should have fix");
-        assert_eq!(fix, "x = 1\ny = 2");
-    }
-
-    #[test]
-    fn fix_semicolon_preserves_indentation() {
-        let diags = check("  x = 1; y = 2");
-        let fix = fix_for_rule(&diags, "R020").expect("should have fix");
-        assert_eq!(fix, "  x = 1\n  y = 2");
+        assert!(fix_for_rule(&diags, "R020").is_none());
     }
 
     #[test]
@@ -612,6 +663,14 @@ mod tests {
         let source = "def foo\n  1\nend\ndef bar\n  2\nend\n";
         let diags = check(source);
         assert!(has_rule(&diags, "R026"), "{diags:?}");
+    }
+
+    #[test]
+    fn no_violation_r026_after_non_method_end() {
+        // `end` closing an `if` block should not trigger R026
+        let source = "if true\n  1\nend\ndef bar\n  2\nend\n";
+        let diags = check(source);
+        assert!(!has_rule(&diags, "R026"), "{diags:?}");
     }
 
     #[test]

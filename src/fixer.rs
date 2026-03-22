@@ -64,22 +64,30 @@ pub fn apply_fixes(source: &str, diags: &[Diagnostic]) -> (String, usize) {
         }
     }
 
-    // Apply DeleteLine in reverse order to preserve line numbers
-    delete_fixes.sort_by(|a, b| b.line.cmp(&a.line));
-    for diag in &delete_fixes {
-        let idx = diag.line.saturating_sub(1);
-        if idx < lines.len() {
-            lines.remove(idx);
-        }
-    }
-
-    // Apply InsertBefore in reverse order to preserve line numbers
+    // Apply InsertBefore first (in reverse order), then DeleteLine (in reverse order).
+    // Inserts must happen before deletes so that delete indices remain valid.
     insert_fixes.sort_by(|a, b| b.line.cmp(&a.line));
     for diag in &insert_fixes {
         let idx = diag.line.saturating_sub(1);
         // Insert at idx (before current line); idx == lines.len() appends at end
         let insert_at = idx.min(lines.len());
         lines.insert(insert_at, diag.fix.clone().unwrap_or_default());
+    }
+
+    // Apply DeleteLine in reverse order to preserve line numbers.
+    // Offset each delete index by the number of inserts at or before that line,
+    // since inserts above have shifted lines down.
+    delete_fixes.sort_by(|a, b| b.line.cmp(&a.line));
+    for diag in &delete_fixes {
+        // Count how many inserts occurred at or before this line (they shifted lines down)
+        let inserts_before = insert_fixes
+            .iter()
+            .filter(|ins| ins.line <= diag.line)
+            .count();
+        let idx = diag.line.saturating_sub(1) + inserts_before;
+        if idx < lines.len() {
+            lines.remove(idx);
+        }
     }
 
     let mut result = lines.join(line_ending);
