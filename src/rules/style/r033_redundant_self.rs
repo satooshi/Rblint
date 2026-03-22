@@ -126,7 +126,7 @@ impl Rule for RedundantSelfRule {
                         // `self.foo` is required to distinguish from the local.
                         let has_same_name_local = locals_stack
                             .last()
-                            .map_or(false, |s| s.contains(name_tok.text.as_str()));
+                            .is_some_and(|s| s.contains(name_tok.text.as_str()));
 
                         if !is_setter && !has_same_name_local {
                             // Build the fix: remove `self.` from the line
