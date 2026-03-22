@@ -89,7 +89,7 @@ fn load_rubocop_yml_raw(path: &Path) -> Option<RuboCopConfig> {
 /// earlier ones); the main file then wins on all conflicts.
 ///
 /// Returns `None` only when the main file itself cannot be read or parsed.
-/// Errors in inherited files are silently skipped (best-effort merge).
+/// Errors in inherited files are skipped with a warning (best-effort merge).
 pub fn load_rubocop_yml(path: &Path) -> Option<RuboCopConfig> {
     let base_dir = path.parent().unwrap_or(Path::new("."));
 
@@ -213,11 +213,18 @@ pub fn convert_to_config(rubocop: &RuboCopConfig) -> Config {
 
         // Extract threshold values
         if let Some(max) = cop_cfg.max {
+            let Some(max) = usize::try_from(max).ok() else {
+                eprintln!(
+                    "Warning: Max value {} for {} is out of range, ignoring",
+                    max, cop_name
+                );
+                continue;
+            };
             match cop_name.as_str() {
-                "Layout/LineLength" => config.line_length = max as usize,
-                "Metrics/MethodLength" => config.max_method_lines = max as usize,
-                "Metrics/ClassLength" => config.max_class_lines = max as usize,
-                "Metrics/CyclomaticComplexity" => config.max_complexity = max as usize,
+                "Layout/LineLength" => config.line_length = max,
+                "Metrics/MethodLength" => config.max_method_lines = max,
+                "Metrics/ClassLength" => config.max_class_lines = max,
+                "Metrics/CyclomaticComplexity" => config.max_complexity = max,
                 _ => {}
             }
         }
