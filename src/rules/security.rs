@@ -70,7 +70,25 @@ const CRED_PATTERNS: &[&str] = &[
 
 fn looks_like_credential_name(name: &str) -> bool {
     let lower = name.to_lowercase();
-    CRED_PATTERNS.iter().any(|p| lower.contains(p))
+    CRED_PATTERNS.iter().any(|p| {
+        // Require word-boundary match: pattern must be preceded by start-of-string or `_`,
+        // and followed by end-of-string or `_`. This prevents false positives such as
+        // `tokenizer` matching `token` or `secretary` matching `secret`.
+        let bytes = lower.as_bytes();
+        let pat = p.as_bytes();
+        let mut start = 0;
+        while let Some(pos) = lower[start..].find(p) {
+            let abs = start + pos;
+            let end = abs + pat.len();
+            let before_ok = abs == 0 || bytes[abs - 1] == b'_';
+            let after_ok = end == bytes.len() || bytes[end] == b'_';
+            if before_ok && after_ok {
+                return true;
+            }
+            start = abs + 1;
+        }
+        false
+    })
 }
 
 impl Rule for HardcodedCredentialsRule {
@@ -270,70 +288,71 @@ impl Rule for ShellInjectionRule {
                 ));
                 continue;
             }
-
-            // IO.popen / Open3 with interpolation (line-based; array-form false positives
-            // are uncommon for these APIs so line-level detection is acceptable)
-            for cmd in &["IO.popen(", "Open3."] {
-                if line.contains(cmd) {
-                    diags.push(Diagnostic::new(
-                        ctx.file,
-                        line_no,
-                        1,
-                        "R053",
-                        format!("`{cmd}` with string interpolation is a shell injection risk — use array form to avoid shell expansion"),
-                        Severity::Warning,
-                    ));
-                    break;
-                }
-            }
         }
 
-        // Token-based detection for system/exec/spawn: handles both paren and no-paren forms
-        // and correctly ignores array arguments (only flags when the first string arg has #{}).
+        // Token-based detection for system/exec/spawn/IO.popen/Open3.xxx:
+        // handles both paren and no-paren forms, and correctly ignores array arguments
+        // (only flags when the first string argument contains #{}).
         const SHELL_METHODS: &[&str] = &["system", "exec", "spawn"];
         for i in 0..tokens.len() {
-            if tokens[i].kind != TokenKind::Ident {
-                continue;
-            }
-            let name = tokens[i].text.as_str();
-            if !SHELL_METHODS.contains(&name) {
+            // ── Simple method calls: system, exec, spawn ──────────────────────
+            if tokens[i].kind == TokenKind::Ident
+                && SHELL_METHODS.contains(&tokens[i].text.as_str())
+            {
+                let name = tokens[i].text.as_str();
+                if first_arg_has_interpolation(tokens, i + 1) {
+                    diags.push(Diagnostic::new(
+                        ctx.file,
+                        tokens[i].line,
+                        tokens[i].col,
+                        "R053",
+                        format!("`{name}` with interpolated string argument is a shell injection risk — use array form to avoid shell expansion"),
+                        Severity::Warning,
+                    ));
+                }
                 continue;
             }
 
-            // Find what immediately follows the method name
+            // ── Constant.method calls: IO.popen / Open3.xxx ───────────────────
+            let is_io = tokens[i].kind == TokenKind::Constant && tokens[i].text == "IO";
+            let is_open3 = tokens[i].kind == TokenKind::Constant && tokens[i].text == "Open3";
+            if !is_io && !is_open3 {
+                continue;
+            }
+
             let mut j = i + 1;
             while j < tokens.len()
                 && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
             {
                 j += 1;
             }
-            if j >= tokens.len() {
+            if j >= tokens.len() || tokens[j].kind != TokenKind::Dot {
                 continue;
             }
 
-            // Unwrap optional parenthesis to reach the first argument
-            if tokens[j].kind == TokenKind::LParen {
+            j += 1;
+            while j < tokens.len()
+                && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+            {
                 j += 1;
-                while j < tokens.len()
-                    && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
-                {
-                    j += 1;
-                }
+            }
+            if j >= tokens.len() || tokens[j].kind != TokenKind::Ident {
+                continue;
             }
 
-            // Flag only when the first argument is a string literal containing interpolation.
-            // This correctly skips array forms like system("cmd", "#{arg}") because the first
-            // arg "cmd" does not contain #{.
-            if j < tokens.len()
-                && tokens[j].kind == TokenKind::StringLiteral
-                && tokens[j].text.contains("#{")
-            {
+            // For IO, only popen passes a shell command string
+            if is_io && tokens[j].text != "popen" {
+                continue;
+            }
+
+            let method_name = format!("{}.{}", tokens[i].text, tokens[j].text);
+            if first_arg_has_interpolation(tokens, j + 1) {
                 diags.push(Diagnostic::new(
                     ctx.file,
                     tokens[i].line,
                     tokens[i].col,
                     "R053",
-                    format!("`{name}` with interpolated string argument is a shell injection risk — use array form to avoid shell expansion"),
+                    format!("`{method_name}` with interpolated string argument is a shell injection risk — use array form to avoid shell expansion"),
                     Severity::Warning,
                 ));
             }
@@ -341,6 +360,29 @@ impl Rule for ShellInjectionRule {
 
         diags
     }
+}
+
+/// Returns true when the first string-literal argument starting at `start` contains `#{`.
+/// Handles both paren form `method("#{x}")` and no-paren form `method "#{x}"`.
+/// Correctly returns false for array forms like `method("safe", "#{x}")` because
+/// the first argument `"safe"` does not contain `#{`.
+fn first_arg_has_interpolation(tokens: &[crate::lexer::Token], start: usize) -> bool {
+    let mut j = start;
+    while j < tokens.len() && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline) {
+        j += 1;
+    }
+    if j >= tokens.len() {
+        return false;
+    }
+    if tokens[j].kind == TokenKind::LParen {
+        j += 1;
+        while j < tokens.len()
+            && matches!(tokens[j].kind, TokenKind::Whitespace | TokenKind::Newline)
+        {
+            j += 1;
+        }
+    }
+    j < tokens.len() && tokens[j].kind == TokenKind::StringLiteral && tokens[j].text.contains("#{")
 }
 
 // ── R054: Unsafe deserialization (Marshal.load / YAML.load) ──────────────────
@@ -534,6 +576,38 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn no_violation_tokenizer_not_token() {
+        // "tokenizer" contains "token" as a substring but not as a whole word
+        let src = "tokenizer = \"abc123\"\n";
+        assert!(
+            !has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_secretary_not_secret() {
+        // "secretary" contains "secret" as a substring but not as a whole word
+        let src = "secretary = \"abc123\"\n";
+        assert!(
+            !has_rule(&check_rule(&HardcodedCredentialsRule, src), "R051"),
+            "{:?}",
+            check_rule(&HardcodedCredentialsRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_access_token_word_boundary() {
+        // "access_token" should still match because "token" is a full word segment
+        let src = "access_token = \"sk-abc123\"\n";
+        assert!(has_rule(
+            &check_rule(&HardcodedCredentialsRule, src),
+            "R051"
+        ));
+    }
+
     // --- R052: dynamic send ---
 
     #[test]
@@ -645,6 +719,40 @@ mod tests {
     fn no_violation_system_array_form() {
         // Array form: interpolation is in a non-first argument, so no shell expansion risk
         let src = "system(\"rm\", \"-rf\", \"#{path}\")\n";
+        assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
+    }
+
+    #[test]
+    fn violation_open3_interpolated_string() {
+        // Single-string form: shell expansion occurs
+        let src = "Open3.capture3(\"git show #{ref}\")\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_open3_array_form() {
+        // Array form: no shell expansion, safe call
+        let src = "Open3.capture3(\"git\", \"show\", \"#{ref}\")\n";
+        assert!(
+            !has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_io_popen_interpolated_string() {
+        let src = "IO.popen(\"ls #{dir}\")\n";
+        assert!(has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
+    }
+
+    #[test]
+    fn no_violation_io_popen_array_form() {
+        let src = "IO.popen([\"ls\", \"#{dir}\"])\n";
         assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
     }
 
