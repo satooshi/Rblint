@@ -27,6 +27,10 @@ pub struct Config {
     #[serde(rename = "max-parameters")]
     pub max_parameters: usize,
 
+    /// Maximum nesting depth within a method body (default: 4)
+    #[serde(rename = "max-nesting")]
+    pub max_nesting: usize,
+
     /// Select only these rules (empty = all rules)
     pub select: Vec<String>,
 
@@ -49,6 +53,7 @@ impl Default for Config {
             max_class_lines: 300,
             max_complexity: 10,
             max_parameters: 5,
+            max_nesting: 4,
             select: vec![],
             ignore: vec![],
             extend_select: vec![],
@@ -168,6 +173,19 @@ ignore = ["R003", "R010"]
         assert_eq!(c.max_method_lines, 50);
         assert_eq!(c.max_class_lines, 300); // default
         assert_eq!(c.ignore, vec!["R003", "R010"]);
+    }
+
+    #[test]
+    fn parse_max_nesting_override() {
+        let toml = r#"max-nesting = 6"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.max_nesting, 6);
+    }
+
+    #[test]
+    fn default_max_nesting_is_4() {
+        let c = Config::default();
+        assert_eq!(c.max_nesting, 4);
     }
 
     #[test]
