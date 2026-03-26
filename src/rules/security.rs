@@ -45,7 +45,10 @@ impl Rule for EvalUsageRule {
                 .map(|k| &tokens[k]);
             if matches!(
                 next_meaningful.map(|t| &t.kind),
-                Some(TokenKind::LParen) | Some(TokenKind::StringLiteral) | Some(TokenKind::Ident)
+                Some(TokenKind::LParen)
+                    | Some(TokenKind::StringLiteral)
+                    | Some(TokenKind::Ident)
+                    | Some(TokenKind::LShift) // heredoc: eval <<~RUBY
             ) {
                 diags.push(Diagnostic::new(
                     ctx.file,
@@ -592,13 +595,19 @@ fn scan_shell_literals(source: &str) -> Vec<(usize, &'static str)> {
                     results.push((start_line, "backtick"));
                 }
             }
-            // `%x(...)` or `%x{...}` shell literal.
+            // `%x(...)`, `%x{...}`, `%x[...]`, or `%x<...>` shell literal.
             b'%' if i + 2 < bytes.len()
                 && bytes[i + 1] == b'x'
-                && (bytes[i + 2] == b'(' || bytes[i + 2] == b'{') =>
+                && matches!(bytes[i + 2], b'(' | b'{' | b'[' | b'<') =>
             {
                 let open = bytes[i + 2];
-                let close = if open == b'(' { b')' } else { b'}' };
+                let close = match open {
+                    b'(' => b')',
+                    b'{' => b'}',
+                    b'[' => b']',
+                    b'<' => b'>',
+                    _ => unreachable!(),
+                };
                 let start_line = line;
                 i += 3;
                 let mut depth = 1usize;
@@ -810,6 +819,27 @@ mod tests {
         let src = "alias eval original_eval\n";
         assert!(
             !has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
+    }
+
+    // Bug: eval with heredoc argument must be flagged
+    #[test]
+    fn violation_eval_heredoc() {
+        let src = "eval <<~RUBY\n  puts 1\nRUBY\n";
+        assert!(
+            has_rule(&check_rule(&EvalUsageRule, src), "R050"),
+            "{:?}",
+            check_rule(&EvalUsageRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_instance_eval_heredoc() {
+        let src = "obj.instance_eval <<~RUBY\n  puts 1\nRUBY\n";
+        assert!(
+            has_rule(&check_rule(&EvalUsageRule, src), "R050"),
             "{:?}",
             check_rule(&EvalUsageRule, src)
         );
@@ -1189,6 +1219,33 @@ mod tests {
             "{:?}",
             check_rule(&ShellInjectionRule, src)
         );
+    }
+
+    // Bug: %x[...] and %x<...> shell literals with interpolation must be detected
+    #[test]
+    fn violation_percent_x_bracket_interpolation() {
+        let src = "out = %x[git show #{ref}]\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn violation_percent_x_angle_interpolation() {
+        let src = "out = %x<ls #{dir}>\n";
+        assert!(
+            has_rule(&check_rule(&ShellInjectionRule, src), "R053"),
+            "{:?}",
+            check_rule(&ShellInjectionRule, src)
+        );
+    }
+
+    #[test]
+    fn no_violation_percent_x_bracket_no_interpolation() {
+        let src = "out = %x[ls -la]\n";
+        assert!(!has_rule(&check_rule(&ShellInjectionRule, src), "R053"));
     }
 
     // Bug: env hash / env variable as first arg must not hide dangerous second arg
