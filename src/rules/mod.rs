@@ -3,6 +3,7 @@ mod frozen_string_literal;
 mod line_length;
 mod missing_frozen_literal;
 mod naming;
+mod security;
 mod style;
 mod syntax;
 mod trailing_whitespace;
@@ -18,6 +19,10 @@ pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
 pub use line_length::LineLengthRule;
 pub use naming::NamingRule;
+pub use security::{
+    DynamicSendRule, EvalUsageRule, HardcodedCredentialsRule, ShellInjectionRule,
+    UnsafeDeserializationRule,
+};
 pub use style::{
     BlankLinesRule, DoubleNegationRule, EmptyMethodRule, FinalNewlineRule, MethodSpacingRule,
     NegatedIfRule, OperatorSpacingRule, PNilRule, RedundantSelfRule, SemicolonRule,
@@ -85,6 +90,11 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
         Box::new(DoubleNegationRule),  // R029
         Box::new(RedundantSelfRule),   // R033
         Box::new(SyntaxRule),
+        Box::new(EvalUsageRule),             // R050
+        Box::new(HardcodedCredentialsRule),  // R051
+        Box::new(DynamicSendRule),           // R052
+        Box::new(ShellInjectionRule),        // R053
+        Box::new(UnsafeDeserializationRule), // R054
         Box::new(ComplexityRule {
             max_method_lines: config.max_method_lines,
             max_class_lines: config.max_class_lines,

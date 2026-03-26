@@ -349,6 +349,34 @@ mod tests {
 
     // --- R030: bracket balance ---
 
+    // Bug: %x[...] shell literals must not produce R030 "Unclosed `[`"
+    #[test]
+    fn no_violation_percent_x_bracket() {
+        assert!(
+            !has_rule(&check("out = %x[git show]"), "R030"),
+            "{:?}",
+            check("out = %x[git show]")
+        );
+    }
+
+    #[test]
+    fn no_violation_percent_x_bracket_with_interpolation() {
+        assert!(
+            !has_rule(&check("out = %x[git show #{ref}]"), "R030"),
+            "{:?}",
+            check("out = %x[git show #{ref}]")
+        );
+    }
+
+    #[test]
+    fn no_violation_percent_x_angle() {
+        assert!(
+            !has_rule(&check("out = %x<ls #{dir}>"), "R030"),
+            "{:?}",
+            check("out = %x<ls #{dir}>")
+        );
+    }
+
     #[test]
     fn no_violation_balanced_parens() {
         assert!(!has_rule(&check("foo(a, b)"), "R030"));

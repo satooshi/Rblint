@@ -331,6 +331,43 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    /// Consume a `%x(...)` / `%x{...}` / `%x[...]` / `%x<...>` shell literal as a
+    /// single `StringLiteral` token.  `%` has already been consumed; this method
+    /// consumes `x`, the opening delimiter, the body, and the matching closing
+    /// delimiter.  Nested same-delimiter pairs (e.g. `%x[arr[0]]`) are handled by
+    /// tracking depth.  `advance()` keeps `self.line` / `self.col` up to date.
+    fn lex_percent_x_literal(&mut self, start_line: usize, start_col: usize) -> Token {
+        self.advance(); // consume 'x'
+        let open_char = self.advance().unwrap(); // '(' | '{' | '[' | '<'
+        let close_char = match open_char {
+            '(' => ')',
+            '{' => '}',
+            '[' => ']',
+            '<' => '>',
+            _ => unreachable!(),
+        };
+        let mut text = format!("%x{}", open_char);
+        let mut depth = 1usize;
+        while self.peek().is_some() {
+            let ch = self.advance().unwrap(); // updates self.line / self.col
+            text.push(ch);
+            if ch == open_char {
+                depth += 1;
+            } else if ch == close_char {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+        }
+        Token {
+            kind: TokenKind::StringLiteral,
+            text,
+            line: start_line,
+            col: start_col,
+        }
+    }
+
     pub fn tokenize(&mut self) -> Vec<Token> {
         let mut tokens = Vec::new();
         loop {
@@ -654,6 +691,9 @@ impl<'a> Lexer<'a> {
                         line: start_line,
                         col: start_col,
                     }
+                }
+                Some('x') if matches!(self.peek_nth(1), Some('(' | '{' | '[' | '<')) => {
+                    self.lex_percent_x_literal(start_line, start_col)
                 }
                 _ => Token {
                     kind: TokenKind::Percent,
