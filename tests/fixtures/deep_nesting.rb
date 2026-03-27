@@ -29,7 +29,9 @@ class Outer
         if b
           if c
             if d
-              puts "counted from method, not module"
+              if e
+                puts "counted from method, not module"
+              end
             end
           end
         end

@@ -57,6 +57,7 @@ Rules:
   R042  High cyclomatic complexity (> 10)
   R060  Unused variable
   R061  Use `.nil?` instead of `== nil`
+  R062  Excessive nesting depth (> 4)
 "
 )]
 pub struct Cli {
