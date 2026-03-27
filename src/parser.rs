@@ -14,6 +14,7 @@ use lib_ruby_parser::{ErrorLevel, Parser, ParserOptions};
 pub fn parse(source: &str) -> Option<Node> {
     let options = ParserOptions {
         buffer_name: "(input)".to_string(),
+        record_tokens: false,
         ..Default::default()
     };
     let parser = Parser::new(source.as_bytes().to_vec(), options);
