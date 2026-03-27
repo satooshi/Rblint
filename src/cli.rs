@@ -56,6 +56,7 @@ Rules:
   R041  Class too long (> 300 lines)
   R042  High cyclomatic complexity (> 10)
   R060  Unused variable
+  R061  Use `.nil?` instead of `== nil`
 "
 )]
 pub struct Cli {

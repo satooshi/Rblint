@@ -160,6 +160,29 @@ fn r060_unused_variable_integration() {
     );
 }
 
+// ── R061 nil comparison ──────────────────────────────────────────────────────
+
+#[test]
+fn r061_nil_comparison_integration() {
+    let diags = lint("tests/fixtures/nil_comparison.rb");
+    let r061: Vec<_> = diags.iter().filter(|d| d.rule == "R061").collect();
+
+    assert_eq!(
+        r061.len(),
+        2,
+        "expected exactly 2 R061 diagnostics (== nil and != nil), got: {r061:?}"
+    );
+
+    // All R061 diagnostics should have auto-fix
+    for d in &r061 {
+        assert!(
+            d.fix.is_some(),
+            "R061 diagnostic should have an auto-fix: {:?}",
+            d
+        );
+    }
+}
+
 // ── AST rules on parse failure ───────────────────────────────────────────────
 
 #[test]

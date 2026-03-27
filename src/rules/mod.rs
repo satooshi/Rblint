@@ -17,7 +17,7 @@ use crate::lexer::Token;
 use crate::parser;
 use crate::tree::{Node, TreeBuilder};
 
-pub use ast_rules::UnusedVariableRule;
+pub use ast_rules::{NilComparisonRule, UnusedVariableRule};
 pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
 pub use line_length::LineLengthRule;
@@ -112,6 +112,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
             max_parameters: config.max_parameters,
         }),
         Box::new(UnusedVariableRule), // R060
+        Box::new(NilComparisonRule),  // R061
     ]
 }
 
