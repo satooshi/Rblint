@@ -55,6 +55,7 @@ Rules:
   R040  Method too long (> 30 lines)
   R041  Class too long (> 300 lines)
   R042  High cyclomatic complexity (> 10)
+  R060  Unused variable
 "
 )]
 pub struct Cli {

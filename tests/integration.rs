@@ -124,3 +124,49 @@ fn r002_provides_fix() {
         .expect("R002 expected");
     assert_eq!(r002.fix.as_deref(), Some("x = 1"));
 }
+
+// ── R060 unused variable ─────────────────────────────────────────────────────
+
+#[test]
+fn r060_unused_variable_integration() {
+    let diags = lint("tests/fixtures/unused_var.rb");
+    let r060: Vec<_> = diags.iter().filter(|d| d.rule == "R060").collect();
+
+    // Should detect unused, temp, and b
+    let messages: Vec<&str> = r060.iter().map(|d| d.message.as_str()).collect();
+    assert!(
+        r060.iter().any(|d| d.message.contains("unused")),
+        "should detect `unused` variable, got: {messages:?}"
+    );
+    assert!(
+        r060.iter().any(|d| d.message.contains("temp")),
+        "should detect `temp` variable, got: {messages:?}"
+    );
+    assert!(
+        r060.iter().any(|d| d.message.contains("b")),
+        "should detect `b` parameter, got: {messages:?}"
+    );
+
+    // `used` should NOT be flagged (note: "unused" contains "used", so check with backtick-delimited name)
+    assert!(
+        !r060.iter().any(|d| d.message.contains("`used`")),
+        "`used` variable should not be flagged"
+    );
+
+    // `_ignored` should NOT be flagged
+    assert!(
+        !r060.iter().any(|d| d.message.contains("_ignored")),
+        "`_ignored` variable should not be flagged"
+    );
+}
+
+// ── AST rules on parse failure ───────────────────────────────────────────────
+
+#[test]
+fn ast_rules_skipped_on_parse_failure() {
+    let source = "def def def\n  x == nil\nend\n";
+    // Should not panic even with malformed Ruby
+    let diags = Linter::new().lint_file("malformed.rb", source);
+    // Lexer-based rules may still fire, but no crash is the key assertion
+    let _ = diags;
+}

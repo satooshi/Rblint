@@ -1,3 +1,4 @@
+mod ast_rules;
 mod complexity;
 mod frozen_string_literal;
 mod line_length;
@@ -16,6 +17,7 @@ use crate::lexer::Token;
 use crate::parser;
 use crate::tree::{Node, TreeBuilder};
 
+pub use ast_rules::UnusedVariableRule;
 pub use complexity::ComplexityRule;
 pub use frozen_string_literal::FrozenStringLiteralRule;
 pub use line_length::LineLengthRule;
@@ -109,6 +111,7 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
             max_complexity: config.max_complexity,
             max_parameters: config.max_parameters,
         }),
+        Box::new(UnusedVariableRule), // R060
     ]
 }
 
