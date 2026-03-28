@@ -28,6 +28,7 @@ bincode = "1"
 notify = "7"
 ctrlc = "3"
 serde_yml = "0.0.12"
+lib-ruby-parser = "4.0.6"
 
 [dev-dependencies]
 tempfile = "3"

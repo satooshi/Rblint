@@ -4,6 +4,7 @@ pub mod diagnostic;
 pub mod fixer;
 pub mod lexer;
 pub mod linter;
+pub(crate) mod parser;
 pub mod reporter;
 pub mod rubocop_compat;
 pub mod rules;

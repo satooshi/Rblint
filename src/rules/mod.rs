@@ -13,6 +13,7 @@ use std::cell::OnceCell;
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
 use crate::lexer::Token;
+use crate::parser;
 use crate::tree::{Node, TreeBuilder};
 
 pub use complexity::ComplexityRule;
@@ -44,6 +45,7 @@ pub struct LintContext<'a> {
     pub lines: &'a [&'a str],
     pub tokens: &'a [Token],
     nodes: OnceCell<Vec<Node>>,
+    ast: OnceCell<Option<parser::Node>>,
 }
 
 impl<'a> LintContext<'a> {
@@ -54,12 +56,18 @@ impl<'a> LintContext<'a> {
             lines,
             tokens,
             nodes: OnceCell::new(),
+            ast: OnceCell::new(),
         }
     }
 
     /// Returns the AST nodes, building them lazily on first access.
     pub fn nodes(&self) -> &[Node] {
         self.nodes.get_or_init(|| TreeBuilder::build(self.tokens))
+    }
+
+    /// Returns the lib-ruby-parser AST, parsing lazily on first access.
+    pub fn ast(&self) -> Option<&parser::Node> {
+        self.ast.get_or_init(|| parser::parse(self.source)).as_ref()
     }
 }
 
@@ -102,4 +110,43 @@ pub fn all_rules(config: &Config) -> Vec<Box<dyn Rule + Send + Sync>> {
             max_parameters: config.max_parameters,
         }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Lexer;
+
+    fn make_context(source: &str) -> (Vec<&str>, Vec<Token>, String) {
+        let lines: Vec<&str> = source.lines().collect();
+        let tokens = Lexer::new(source).tokenize();
+        (lines, tokens, source.to_string())
+    }
+
+    #[test]
+    fn ast_returns_some_for_valid_ruby() {
+        let source = "x = 1";
+        let (lines, tokens, _src) = make_context(source);
+        let ctx = LintContext::new("test.rb", source, &lines, &tokens);
+        let ast = ctx.ast();
+        assert!(ast.is_some(), "ast() should return Some for valid Ruby");
+    }
+
+    #[test]
+    fn ast_is_lazily_evaluated() {
+        let source = "def foo; end";
+        let (lines, tokens, _src) = make_context(source);
+        let ctx = LintContext::new("test.rb", source, &lines, &tokens);
+
+        // First call triggers parsing
+        let first = ctx.ast();
+        // Second call returns cached result — must be the same reference
+        let second = ctx.ast();
+
+        assert!(first.is_some());
+        assert!(
+            std::ptr::eq(first.unwrap(), second.unwrap()),
+            "ast() should return the same cached reference on repeated calls"
+        );
+    }
 }
