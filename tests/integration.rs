@@ -183,6 +183,37 @@ fn r061_nil_comparison_integration() {
     }
 }
 
+// ── R062 deep nesting ────────────────────────────────────────────────────────
+
+#[test]
+fn r062_deep_nesting_integration() {
+    let diags = lint("tests/fixtures/deep_nesting.rb");
+    let r062: Vec<_> = diags.iter().filter(|d| d.rule == "R062").collect();
+
+    assert!(
+        !r062.is_empty(),
+        "expected R062 diagnostics for deep nesting, got none"
+    );
+
+    // Should flag lines inside too_deep (lines 11-23) and method_in_nested_class (lines 27-39)
+    assert!(
+        r062.iter().any(|d| d.line >= 11 && d.line <= 23),
+        "should detect deep nesting in `too_deep` method (lines 11-23): {:?}",
+        r062
+    );
+    assert!(
+        r062.iter().any(|d| d.line >= 27 && d.line <= 41),
+        "should detect deep nesting in `method_in_nested_class` (lines 27-41): {:?}",
+        r062
+    );
+
+    // `shallow` (lines 3-9) should NOT trigger R062
+    assert!(
+        !r062.iter().any(|d| d.line >= 3 && d.line <= 9),
+        "`shallow` method should not trigger R062"
+    );
+}
+
 // ── AST rules on parse failure ───────────────────────────────────────────────
 
 #[test]

@@ -216,6 +216,9 @@ max-complexity = 10
 # Maximum number of method parameters (default: 5)
 max-parameters = 5
 
+# Maximum nesting depth within method bodies (default: 4)
+max-nesting = 4
+
 # Rules to enable (empty = all rules enabled)
 # select = ["R001", "R002"]
 
